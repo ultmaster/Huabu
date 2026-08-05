@@ -11,6 +11,7 @@
 
 import {
   editorViewCtx,
+  editorViewOptionsCtx,
   parserCtx,
   schemaCtx,
   serializerCtx,
@@ -165,6 +166,8 @@ export interface MilkdownFactoryOptions {
   editable?: boolean;
   /** Optional placeholder text shown when the doc is empty. */
   placeholder?: string;
+  /** Accessible name applied to the ProseMirror textbox. */
+  ariaLabel?: string;
   /** Which selection toolbar surface should be active. Default `sediment`. */
   toolbarMode?: 'none' | 'sediment';
   /**
@@ -276,6 +279,8 @@ export interface MilkdownInstance {
   setMarkdown(markdown: string): void;
   /** Toggle the editor between editable and read-only. */
   setReadonly(readonly: boolean): void;
+  /** Update the ProseMirror textbox's accessible name. */
+  setAriaLabel(label: string): void;
   /** Current block, inline mark, and color state for toolbar rendering. */
   getFormattingState(): MilkdownFormattingState;
   /** Subscribe to formatting-state changes after editor transactions. */
@@ -1502,6 +1507,7 @@ export async function createMilkdown(
     initialMarkdown,
     editable = true,
     placeholder,
+    ariaLabel: initialAriaLabel,
     toolbarMode = 'sediment',
     previewMode = false,
     uploadImage,
@@ -1509,6 +1515,7 @@ export async function createMilkdown(
   } = options;
   const resolveImageSrc = options.resolveImageSrc ?? ((src: string) => src);
   const useReactToolbar = !previewMode && toolbarMode === 'sediment';
+  let ariaLabel = initialAriaLabel;
 
   // Normalize LaTeX-style math delimiters (`\[…\]`, `\(…\)`)
   // emitted by AI assistants into the `$$…$$` / `$…$` form that
@@ -1525,11 +1532,11 @@ export async function createMilkdown(
       [Crepe.Feature.AI]: false,
       [Crepe.Feature.TopBar]: false,
       [Crepe.Feature.Toolbar]: false,
-      // Hide Crepe edit-time popovers when React owns the toolbar, and
-      // in preview mode. BlockEdit stays on so the drag handle is still
-      // rendered; the slash menu inside BlockEdit is naturally suppressed
-      // in preview because input events never reach the editor (see
-      // `MilkdownPreview` capture handlers).
+      // Hide Crepe edit-time popovers when React owns the toolbar, when
+      // the editor is read-only, and in drag-only preview mode. BlockEdit
+      // stays on so the drag handle is still rendered; the slash menu inside
+      // BlockEdit is naturally suppressed in preview because input events
+      // never reach the editor (see `MilkdownPreview` capture handlers).
       //
       // `Cursor` is also disabled in preview mode: it injects a
       // permanent `<div class="crepe-drop-cursor milkdown-drop-indicator">`
@@ -1538,7 +1545,7 @@ export async function createMilkdown(
       // never receive typing input, so both are dead weight — and with
       // N message cards in a long thread we'd otherwise leak N hidden
       // overlay divs into the DOM.
-      ...(useReactToolbar || previewMode
+      ...(useReactToolbar || previewMode || !editable
         ? {
             [Crepe.Feature.LinkTooltip]: false,
           }
@@ -1555,6 +1562,26 @@ export async function createMilkdown(
         ? { [Crepe.Feature.Placeholder]: { text: placeholder } }
         : {}),
     },
+  });
+
+  // ProseMirror owns the textbox DOM and can replace it during Crepe's async
+  // setup (notably across React StrictMode's setup/cleanup replay). Put the
+  // accessible name in the EditorView props so every DOM instance is born
+  // with it instead of patching whichever `.ProseMirror` happens to be
+  // mounted at one point in time.
+  crepe.editor.config((ctx) => {
+    ctx.update(editorViewOptionsCtx, (viewOptions) => {
+      const inheritedAttributes = viewOptions.attributes;
+      return {
+        ...viewOptions,
+        attributes: (state) => ({
+          ...(typeof inheritedAttributes === 'function'
+            ? inheritedAttributes(state)
+            : inheritedAttributes),
+          ...(ariaLabel ? { 'aria-label': ariaLabel } : {}),
+        }),
+      };
+    });
   });
 
   // Markdown change listeners.
@@ -2101,6 +2128,15 @@ export async function createMilkdown(
     },
     setReadonly: (readonly: boolean) => {
       crepe.setReadonly(readonly);
+    },
+    setAriaLabel: (label: string) => {
+      ariaLabel = label;
+      crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        // Re-applying the declarative attributes prop makes ProseMirror
+        // recompute its outer decoration from the updated closure value.
+        view.setProps({ attributes: view.props.attributes });
+      });
     },
     getFormattingState: () => {
       let result: MilkdownFormattingState = {

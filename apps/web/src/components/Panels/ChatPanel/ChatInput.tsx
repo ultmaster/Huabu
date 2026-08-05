@@ -593,6 +593,9 @@ export const ChatInput = ({
           <div className="relative">
             <textarea
               ref={textareaRef}
+              name="agent-message"
+              autoComplete="off"
+              aria-label={currentPlaceholder}
               value={value}
               onChange={(e) => {
                 onChange(e.target.value);
