@@ -32,15 +32,7 @@ export {
   isWorldCanvasId,
   requireWorldCanvasId,
 } from '../workspace/disk/canvas-dirs.js';
-export {
-  withCanvasMutex,
-  updateNode,
-  applyNodeUpdate,
-} from '../canvas/write-coordinator.js';
-export type {
-  UpdateNodeOptions,
-  UpdateNodeOutcome,
-} from '../canvas/write-coordinator.js';
+export { withCanvasMutex } from '../canvas/canvas-mutex.js';
 export type {
   CanvasEvent,
   CanvasFile,
@@ -98,12 +90,12 @@ export type {
   SpaceCommitPublication,
   SpaceCommitRecord,
   SpaceCommitResult,
+  SpaceHandle,
+  SpaceCatalogRepository,
   SpaceCreateInput,
   SpaceCreateResult,
   SpaceDeleteInput,
   SpaceDeleteResult,
-  SpaceHandle,
-  SpaceCatalogRepository,
   SpaceLifecycleRepository,
   SpaceRepository,
   StructuredBackendKind,

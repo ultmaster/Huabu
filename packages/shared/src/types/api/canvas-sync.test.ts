@@ -11,6 +11,12 @@ import {
   nodeChangeSchema,
   shouldInlineNodeUiProjection,
 } from './canvas-sync.js';
+import {
+  deleteNodeBodySchema,
+  putCanvasBodySchema,
+  putNodeContentBodySchema,
+} from './canvas.js';
+import { preprocessNodeBodySchema } from './preprocessing.js';
 
 import type { NodeUiProjection } from './canvas-sync.js';
 
@@ -136,7 +142,7 @@ describe('CanvasCommitEvent', () => {
   });
 });
 
-describe('MutationAck', () => {
+describe('MutationAck and additive mutation request fields', () => {
   it('validates the reusable acknowledgement', () => {
     expect(
       mutationAckSchema.parse({
@@ -178,5 +184,44 @@ describe('MutationAck', () => {
         nodeChanges: [],
       }).success,
     ).toBe(false);
+  });
+
+  it('accepts originator and structural baseline without a client commit id', () => {
+    const parsed = putCanvasBodySchema.parse({
+      version: 7,
+      state: { nodes: [], edges: [] },
+      expectStructureRevision: 'sha256:baseline',
+      originator: { source: 'ui', tabId: 'tab-1' },
+      commitId: 'must-not-be-trusted',
+    });
+
+    expect(parsed).toEqual({
+      version: 7,
+      state: { nodes: [], edges: [] },
+      expectStructureRevision: 'sha256:baseline',
+      originator: { source: 'ui', tabId: 'tab-1' },
+    });
+  });
+
+  it('accepts originator metadata on node content and preprocessing writes', () => {
+    expect(
+      deleteNodeBodySchema.safeParse({
+        originator: { source: 'ui', tabId: 'tab-1' },
+      }).success,
+    ).toBe(true);
+    expect(
+      putNodeContentBodySchema.safeParse({
+        nodeType: 'note',
+        content: 'body',
+        originator: { source: 'ui', tabId: 'tab-1' },
+      }).success,
+    ).toBe(true);
+    expect(
+      preprocessNodeBodySchema.safeParse({
+        nodeType: 'note',
+        snapshot: { content: 'body' },
+        originator: { source: 'ui', tabId: 'tab-1' },
+      }).success,
+    ).toBe(true);
   });
 });
