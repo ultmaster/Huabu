@@ -73,6 +73,12 @@ function resolveSpecifier(fromRelative: string, spec: string): string | null {
 const storageFiles = walk(STORAGE_DIR);
 const sourceFiles = walk(SRC_DIR);
 
+// Workspace activation must recover an interrupted Disk commit before any
+// migration reads or writes that Workspace. This is the sole application →
+// adapter exception; every ordinary storage consumer still crosses a port.
+const WORKSPACE_RECOVERY_IMPORT =
+  'modules/storage/backends/disk/transaction-journal';
+
 function inLayer(relative: string, layer: string): boolean {
   return relative.startsWith(`modules/storage/${layer}/`);
 }
@@ -157,6 +163,12 @@ describe('storage dependency direction', () => {
       if (file.startsWith('modules/storage/')) continue;
       for (const spec of specifiersOf(file)) {
         const target = resolveSpecifier(file, spec);
+        if (
+          file === 'modules/workspace-prepare.ts' &&
+          target === WORKSPACE_RECOVERY_IMPORT
+        ) {
+          continue;
+        }
         if (target?.includes('modules/storage/backends')) {
           violations.push(`${file} → ${spec}`);
         }

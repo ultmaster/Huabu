@@ -29,7 +29,10 @@ import {
   type CanvasChangeRecord,
 } from '@huabu/shared/canvas-engine';
 
-import { assertSpaceMutationAllowed } from './legacy/space-lifecycle-admission.js';
+import {
+  assertSpaceMutationAllowed,
+  withSpaceMutationAdmission,
+} from './legacy/space-lifecycle-admission.js';
 import { readDiskSpaceRecord } from './space-repository.js';
 import {
   atomicWriteJson,
@@ -185,10 +188,16 @@ class DiskCanvasLogCoordinator {
     this.assertActiveWorkspace();
     if (events.length === 0) return;
     events.forEach(validateEventInput);
-    this.requireSpace();
-    // One buffer, one write(2): the batch lands contiguously or (on a crash
-    // mid-write) its trailing partial line is repaired before the next append.
-    this.#store.appendEvents(events);
+    await withSpaceMutationAdmission(
+      this.#workspacePath,
+      this.#store.canvasId,
+      async () => {
+        this.requireSpace();
+        // One buffer, one write(2): the batch lands contiguously or (on a crash
+        // mid-write) its trailing partial line is repaired before the next append.
+        this.#store.appendEvents(events);
+      },
+    );
   }
 
   async readEvents(limit?: number): Promise<CanvasEvent[]> {
@@ -256,14 +265,20 @@ class DiskCanvasLogCoordinator {
     records: readonly CanvasChangeRecord[],
   ): Promise<CanvasChangeRecord[]> {
     this.assertActiveWorkspace();
-    this.requireSpace();
-    const filePath = changesPath(this.#store.canvasId, threadId);
-    const existing = coalesceChanges(
-      readJsonArray<CanvasChangeRecord>(filePath, 'change-review records'),
+    return withSpaceMutationAdmission(
+      this.#workspacePath,
+      this.#store.canvasId,
+      async () => {
+        this.requireSpace();
+        const filePath = changesPath(this.#store.canvasId, threadId);
+        const existing = coalesceChanges(
+          readJsonArray<CanvasChangeRecord>(filePath, 'change-review records'),
+        );
+        const merged = coalesceChanges([...existing, ...records]);
+        atomicWriteJson(filePath, merged);
+        return merged;
+      },
     );
-    const merged = coalesceChanges([...existing, ...records]);
-    atomicWriteJson(filePath, merged);
-    return merged;
   }
 
   async removeChange(
@@ -271,16 +286,22 @@ class DiskCanvasLogCoordinator {
     changeId: string,
   ): Promise<CanvasChangeRecord | null> {
     this.assertActiveWorkspace();
-    this.requireSpace();
-    const filePath = changesPath(this.#store.canvasId, threadId);
-    const existing = coalesceChanges(
-      readJsonArray<CanvasChangeRecord>(filePath, 'change-review records'),
+    return withSpaceMutationAdmission(
+      this.#workspacePath,
+      this.#store.canvasId,
+      async () => {
+        this.requireSpace();
+        const filePath = changesPath(this.#store.canvasId, threadId);
+        const existing = coalesceChanges(
+          readJsonArray<CanvasChangeRecord>(filePath, 'change-review records'),
+        );
+        const idx = existing.findIndex((record) => record.id === changeId);
+        if (idx < 0) return null;
+        const [removed] = existing.splice(idx, 1);
+        atomicWriteJson(filePath, existing);
+        return removed ?? null;
+      },
     );
-    const idx = existing.findIndex((record) => record.id === changeId);
-    if (idx < 0) return null;
-    const [removed] = existing.splice(idx, 1);
-    atomicWriteJson(filePath, existing);
-    return removed ?? null;
   }
 
   // ── Intent episodes ───────────────────────────────────────────────────────
@@ -295,13 +316,24 @@ class DiskCanvasLogCoordinator {
 
   async upsertIntent(episode: IntentEpisode): Promise<void> {
     this.assertActiveWorkspace();
-    this.requireSpace();
-    const filePath = intentPath(this.#store.canvasId);
-    const episodes = readJsonArray<IntentEpisode>(filePath, 'intent episodes');
-    const idx = episodes.findIndex((candidate) => candidate.id === episode.id);
-    if (idx >= 0) episodes[idx] = episode;
-    else episodes.push(episode);
-    atomicWriteJson(filePath, episodes);
+    await withSpaceMutationAdmission(
+      this.#workspacePath,
+      this.#store.canvasId,
+      async () => {
+        this.requireSpace();
+        const filePath = intentPath(this.#store.canvasId);
+        const episodes = readJsonArray<IntentEpisode>(
+          filePath,
+          'intent episodes',
+        );
+        const idx = episodes.findIndex(
+          (candidate) => candidate.id === episode.id,
+        );
+        if (idx >= 0) episodes[idx] = episode;
+        else episodes.push(episode);
+        atomicWriteJson(filePath, episodes);
+      },
+    );
   }
 }
 

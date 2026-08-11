@@ -52,7 +52,9 @@ export type {
 
 export {
   canvasBlobs,
+  createSpace,
   createStorage,
+  deleteSpace,
   getBlobStore,
   getStorage,
   getStructuredStore,
@@ -88,8 +90,13 @@ export type {
   LegacyNodeStore,
   NewCanvasEvent,
   NodeWriteResult,
+  SpaceCreateInput,
+  SpaceCreateResult,
+  SpaceDeleteInput,
+  SpaceDeleteResult,
   SpaceHandle,
   SpaceCatalogRepository,
+  SpaceLifecycleRepository,
   SpaceRepository,
   SpaceWriteResult,
   StructuredBackendKind,

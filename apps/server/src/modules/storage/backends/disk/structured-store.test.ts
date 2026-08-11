@@ -22,6 +22,7 @@ import { refreshCanvasDirIndex } from '../../../workspace/disk/canvas-dirs.js';
 import { toSafeFilename } from '../../../workspace/disk/naming.js';
 import { tasksPath } from '../../../workspace/disk/paths.js';
 import { describeCanvasLogRepositoriesContract } from '../../ports/contracts/canvas-log-repository.contract.js';
+import { describeSpaceLifecycleContract } from '../../ports/contracts/space-lifecycle.contract.js';
 import { describeSpaceRepositoryContract } from '../../ports/contracts/space-repository.contract.js';
 import { describeStructuredStoreContract } from '../../ports/contracts/structured-store.contract.js';
 
@@ -53,6 +54,22 @@ function seedSpace(root: string, canvasId: string, title: string): CanvasFile {
   return record;
 }
 
+function seedWorld(root: string): CanvasFile {
+  const dir = path.join(root, '.world');
+  mkdirSync(dir, { recursive: true });
+  const record: CanvasFile = {
+    canvasId: 'canvas-world',
+    title: 'World',
+    version: 0,
+    state: { nodes: [], edges: [] },
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  writeFileSync(path.join(dir, 'space.json'), JSON.stringify(record), 'utf8');
+  refreshCanvasDirIndex();
+  return record;
+}
+
 function freshWorkspace(prefix: string): string {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
   workspaceState.path = root;
@@ -64,6 +81,21 @@ describeStructuredStoreContract('DiskStructuredStore', () => {
   const root = freshWorkspace('huabu-structured-');
   return {
     store: new DiskStructuredStore(),
+    cleanup: () => {
+      resetStorageCache();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+});
+
+describeSpaceLifecycleContract('DiskSpaceLifecycleRepository', () => {
+  const root = freshWorkspace('huabu-space-lifecycle-');
+  seedWorld(root);
+  const store = new DiskStructuredStore();
+  return {
+    lifecycle: store.lifecycle(),
+    read: (canvasId: string) => store.space(canvasId).record.read(),
+    worldCanvasId: 'canvas-world',
     cleanup: () => {
       resetStorageCache();
       rmSync(root, { recursive: true, force: true });

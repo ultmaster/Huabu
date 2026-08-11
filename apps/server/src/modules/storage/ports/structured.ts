@@ -63,6 +63,15 @@ export interface StructuredStore {
    */
   catalog(): SpaceCatalogRepository;
   /**
+   * Return the backend-neutral owner of Space creation and deletion.
+   *
+   * Lifecycle repositories are bound to the backend namespace that was
+   * active when they were created. Cross-store cleanup (currently Canvas
+   * blobs) is supplied through the delete hook so the structured record stays
+   * present until that independently durable cleanup succeeds.
+   */
+  lifecycle(): SpaceLifecycleRepository;
+  /**
    * Return the handle for one validated Space id.
    *
    * Handles for the same id denote the same Space; handles for different ids
@@ -73,6 +82,50 @@ export interface StructuredStore {
    * durable state and belongs in a repository, not on a handle.
    */
   space(canvasId: string): SpaceHandle;
+}
+
+// ─── Space lifecycle ───────────────────────────────────────────────────────────────────
+
+export interface SpaceCreateInput {
+  readonly canvasId: string;
+  readonly title: string | null;
+}
+
+export type SpaceCreateResult =
+  | {
+      readonly ok: true;
+      readonly record: CanvasFile;
+      /** Canonical title after filesystem-name de-duplication. */
+      readonly effectiveTitle: string | null;
+    }
+  | { readonly ok: false; readonly reason: 'already-exists' };
+
+export interface SpaceDeleteInput {
+  readonly canvasId: string;
+  /**
+   * Cleanup owned by another store that must finish while the structured
+   * record still names it. A rejection leaves the Space intact and retryable.
+   * The hook is never invoked for World.
+   */
+  readonly beforeRemove?: () => Promise<void>;
+}
+
+export type SpaceDeleteResult =
+  | { readonly ok: true; readonly reason: 'deleted' }
+  | {
+      readonly ok: false;
+      readonly reason: 'not-found' | 'world-forbidden';
+    };
+
+/** Aggregate membership lifecycle for one structured backend namespace. */
+export interface SpaceLifecycleRepository {
+  /** Create one empty version-0 Space; exactly one same-id caller wins. */
+  create(input: SpaceCreateInput): Promise<SpaceCreateResult>;
+  /**
+   * Delete one Space. Environmental failures reject; business outcomes are
+   * returned explicitly.
+   */
+  delete(input: SpaceDeleteInput): Promise<SpaceDeleteResult>;
 }
 
 /** Read-only membership and World identity for one backend namespace. */
