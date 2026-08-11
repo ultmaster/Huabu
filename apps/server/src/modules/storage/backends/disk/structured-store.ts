@@ -23,8 +23,9 @@
 
 import { createDiskCanvasLogRepositories } from './canvas-log-repository.js';
 import { getCanvasStore } from './legacy/canvas-store-cache.js';
-import { DiskLegacyNodeStore } from './legacy-node-store.js';
+import { DiskNodeRepository } from './node-repository.js';
 import { DiskSpaceCatalogRepository } from './space-catalog-repository.js';
+import { DiskSpaceCommitter } from './space-commit.js';
 import { DiskSpaceLifecycleRepository } from './space-lifecycle.js';
 import { DiskSpaceRepository } from './space-repository.js';
 import { DiskCanvasTaskRepository } from './task-repository.js';
@@ -58,12 +59,14 @@ export class DiskStructuredStore implements StructuredStore {
     // `getCanvasStore` validates the id and owns the instance cache.
     const store = getCanvasStore(canvasId);
     const logRepositories = createDiskCanvasLogRepositories(store);
+    const committer = new DiskSpaceCommitter(store);
     return {
       canvasId: store.canvasId,
       record: new DiskSpaceRepository(store),
       ...logRepositories,
       tasks: new DiskCanvasTaskRepository(store),
-      nodes: new DiskLegacyNodeStore(store),
+      nodes: new DiskNodeRepository(store),
+      commit: (input) => committer.commit(input),
     };
   }
 }

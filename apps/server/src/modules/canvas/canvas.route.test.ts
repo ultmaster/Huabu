@@ -498,7 +498,7 @@ describe('Space export/import persistence', () => {
     ).toMatchObject({ ok: true });
     const history = getStructuredStore().space('c1');
     await history.events.append([{ payload: action('n1'), ts: 1 }]);
-    await history.deltas.append({
+    store.appendDeltaLogEntry({
       version: 1,
       ts: 2,
       commands: [],

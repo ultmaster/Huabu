@@ -38,7 +38,6 @@ import {
   atomicWriteJson,
   readJsonLinesStrict,
   readJsonStrict,
-  repairJsonLinesTail,
 } from '../../../../utils/fs.js';
 import {
   changesPath,
@@ -84,15 +83,6 @@ function validateEventInput(value: unknown, index: number): void {
   if (!parsed.success) {
     throw new TypeError(
       `Invalid Canvas event append input at index ${index}: ${firstIssue(parsed.error)}`,
-    );
-  }
-}
-
-function validateDeltaInput(value: unknown): void {
-  const parsed = deltaLogEntrySchema.safeParse(value);
-  if (!parsed.success) {
-    throw new TypeError(
-      `Invalid Canvas delta append input: ${firstIssue(parsed.error)}`,
     );
   }
 }
@@ -207,45 +197,11 @@ class DiskCanvasLogCoordinator {
 
   // ── Delta log ─────────────────────────────────────────────────────────────
 
-  async appendDelta(entry: DeltaLogEntry): Promise<void> {
-    this.assertActiveWorkspace();
-    validateDeltaInput(entry);
-    this.appendDeltaIfNewer(entry);
-  }
-
   async readDeltasSince(fromVersion: number): Promise<DeltaLogEntry[]> {
     this.assertActiveWorkspace();
     const all = readValidatedDeltas(deltaLogPath(this.#store.canvasId));
     if (fromVersion <= 0) return all;
     return all.filter((row) => row.version > fromVersion);
-  }
-
-  /**
-   * Guard and append in one turn.
-   *
-   * ⚠️ MUST NOT `await`. The uniqueness guarantee — no two rows share a
-   * version, and versions strictly increase — holds only because the tail
-   * read and the append run in one uninterrupted JavaScript turn, so a
-   * concurrent append cannot slip between them. See the same constraint on
-   * `DiskSpaceRepository.swapIfCurrent`, which documents what the contract
-   * suite's ordering has to be to detect a violation and what a
-   * connection-based adapter must do instead.
-   */
-  private appendDeltaIfNewer(entry: DeltaLogEntry): void {
-    this.requireSpace();
-    const filePath = deltaLogPath(this.#store.canvasId);
-    // Repair first so the validated scan observes the last complete row.
-    // A valid unterminated row is kept; a malformed crash fragment is removed.
-    repairJsonLinesTail(filePath);
-    const rows = readValidatedDeltas(filePath);
-    const last = rows[rows.length - 1] ?? null;
-    if (last && entry.version <= last.version) {
-      throw new Error(
-        `CanvasDeltaRepository(${this.#store.canvasId}) refusing delta version ` +
-          `${entry.version}; the log is already at ${last.version}`,
-      );
-    }
-    this.#store.appendDeltaLogEntry(entry);
   }
 
   // ── Change-review records ─────────────────────────────────────────────────
@@ -354,7 +310,6 @@ export function createDiskCanvasLogRepositories(
     read: (limit?: number) => coordinator.readEvents(limit),
   });
   const deltas: CanvasDeltaRepository = Object.freeze({
-    append: (entry: DeltaLogEntry) => coordinator.appendDelta(entry),
     readSince: (fromVersion: number) =>
       coordinator.readDeltasSince(fromVersion),
   });
