@@ -1,6 +1,6 @@
 # Multi-Backend Storage
 
-Status: Phases 1–5 implemented; SQLite remains a contract preview
+Status: Phases 1–5 implemented; SQLite is a selectable profile
 Last updated: 2026-09-04
 
 > **Scope and decision confidence.** This proposal records the two-port
@@ -59,10 +59,14 @@ Last updated: 2026-09-04
 > harness, **implemented**). §12 is the authoritative plan;
 > the decision table in §2 marks what each step has actually settled.
 >
-> Phase 5 is specified in §12.9 and is **implemented by this branch** as an
-> isolated SQLite structured-store preview. It exercises the portable
-> contracts with real SQLite files but is deliberately absent from runtime
-> composition; Postgres and Azure adapters do not exist.
+> Phase 5 is specified in §12.9 and is **implemented by this branch**.
+> `HUABU_STRUCTURED_BACKEND=sqlite HUABU_BLOB_BACKEND=sqlite` is a real
+> profile: Workspaces, Spaces, nodes, logs, Tasks, blob bytes, and agent
+> conversations all live in one database file under
+> `<data dir>/storage/sqlite/`, and the deployment needs no Workspace folder
+> and no Space directories. What it does **not** serve is enumerated in
+> §12.9.4 and declared in `storage/capabilities.ts`, which is the list an
+> operator sees at startup. Postgres and Azure adapters still do not exist.
 
 ---
 
@@ -89,24 +93,24 @@ built above these ports, but its form is intentionally unresolved here.
 
 ## 2. Decision status
 
-| Topic                                                  | Status                    | Current position                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Separate authoritative structured and blob ports       | **Accepted** (P1, merged) | Storage is composed from `StructuredStore` and `BlobStore`; there is no single backend interface that mixes both concerns.                                                                                                                                                                                                                                                                 |
-| Structured backend family                              | **Settled direction**     | Support Disk, SQLite, and Postgres implementations. Disk is selectable; SQLite has an isolated contract-preview adapter but is not selectable; Postgres has no adapter.                                                                                                                                                                                                                    |
-| Blob backend family                                    | **Settled direction**     | Support Disk and Azure Blob implementations. Only Disk exists.                                                                                                                                                                                                                                                                                                                             |
-| Independent composition                                | **Accepted** (P1, merged) | `StorageProfile` has two env-parsed axes; `validateStorageProfile` fails fast on unimplemented kinds and is the extension point for combination rules. The lazy `getStorage()` path now rejects profiles whose adapters require awaited initialization (§12.1.1).                                                                                                                          |
-| Blob port contract                                     | **Accepted** (P1, merged) | Connection → scope, stream-oriented, no permanent absolute path in the common contract; `materialize()` returns a bounded lease for the one consumer needing a file. Replacement atomicity and post-release lease semantics are contract terms, not adapter accidents (§6.2, §12.1.1).                                                                                                     |
-| Concrete interface shape and async migration           | **Accepted** (P4)         | Blob and portable structured repositories are async. `StructuredStore` exposes catalogue/lifecycle and scoped Space handles; the structured mutations enumerated in §12.4 use those ports. Disk-only physical capabilities remain explicit blockers for selecting another profile.                                                                                                         |
-| Exact structured repositories and aggregate boundaries | **Accepted minimum** (P4) | Catalogue, lifecycle, Space CAS, nodes, four Canvas-log families, Tasks, and the ordered writer have reusable contracts. A rejected in-process node → record → optional-delta batch restores prestate; explicit title rename remains an earlier best-effort boundary. Crash recovery, unknown remote outcomes, idempotency, publication, and multi-process serialization are not promised. |
-| Node Markdown ownership                                | **Accepted** (P4)         | Authored node content remains with structured node records because it participates in revision CAS, search, and node mutation. Opaque and large bytes remain in BlobStore.                                                                                                                                                                                                                 |
-| Blob key, staging, deletion, and GC semantics          | Proposed / open           | Names are the existing `<artifactId><ext>` keys; `deleteAll()` covers Space destruction. Staging, reference counting, and GC remain undesigned. Per-key deletion stays out of the public port, but the absence of any cleanup path is what makes atomic replace mandatory (§6.2).                                                                                                          |
-| Space-handle identity and caching                      | **Corrected** (P1)        | `space(id)` returning a stable handle is bounded by the LRU behind it, not guaranteed. In-memory tombstones and the filename index are therefore adapter-local caches, never durable state (§12.1.1, §12.2.4).                                                                                                                                                                             |
-| Reaching one Space                                     | **Accepted** (§12.6)      | One `space(canvasId)` facade on the composition root joins both ports; the two ports keep their independence and are joined only where the cross-store rules already live. A capability only one backend has hangs off the same handle, named for that backend and typed by its absence — `diskTree`, `null` elsewhere (§6.4.1).                                                           |
-| Residual per-Space files                               | **Accepted** (§12.8)      | Four dispositions, not one: Disk-only and declared, portable and re-implemented, structured record, or blob (§6.4.2). Every current consumer is assigned in §6.4.3 and the ones that pay for themselves on Disk are built; what a second backend must pay for is named, not deferred silently.                                                                                             |
-| Backend selection scope                                | **Accepted**              | Backend selection and its connection/pool are process-global. Workspaces are namespaces inside the configured backend; activating another Workspace re-scopes repository/handle operations without dropping or reconnecting the backend. A SQL profile serves every Workspace through one live connection/pool.                                                                            |
-| Logical filesystem view                                | Open                      | A possible `SpaceFileView` above both stores; name and contract are not accepted yet.                                                                                                                                                                                                                                                                                                      |
-| Real agent workspace                                   | Open                      | Materialized directory, OS mount, protocol-only access, or a combination remain under evaluation.                                                                                                                                                                                                                                                                                          |
-| Agent-authored filesystem write-back                   | Open                      | Read-only projection, explicit checkout/commit, and live bidirectional sync are alternatives, not decisions.                                                                                                                                                                                                                                                                               |
+| Topic                                                  | Status                    | Current position                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Separate authoritative structured and blob ports       | **Accepted** (P1, merged) | Storage is composed from `StructuredStore` and `BlobStore`; there is no single backend interface that mixes both concerns.                                                                                                                                                                                                                                                                                       |
+| Structured backend family                              | **Settled direction**     | Support Disk, SQLite, and Postgres implementations. Disk is selectable; SQLite has an isolated contract-preview adapter but is not selectable; Postgres has no adapter.                                                                                                                                                                                                                                          |
+| Blob backend family                                    | **Settled direction**     | Support Disk and Azure Blob implementations. Only Disk exists.                                                                                                                                                                                                                                                                                                                                                   |
+| Independent composition                                | **Accepted** (P1, merged) | `StorageProfile` has two env-parsed axes; `validateStorageProfile` fails fast on unimplemented kinds and is the extension point for combination rules. The lazy `getStorage()` path now rejects profiles whose adapters require awaited initialization (§12.1.1).                                                                                                                                                |
+| Blob port contract                                     | **Accepted** (P1, merged) | Connection → scope, stream-oriented, no permanent absolute path in the common contract; `materialize()` returns a bounded lease for the one consumer needing a file. Replacement atomicity and post-release lease semantics are contract terms, not adapter accidents (§6.2, §12.1.1).                                                                                                                           |
+| Concrete interface shape and async migration           | **Accepted** (P4)         | Blob and portable structured repositories are async. `StructuredStore` exposes catalogue/lifecycle and scoped Space handles; the structured mutations enumerated in §12.4 use those ports. Disk-only physical capabilities remain explicit blockers for selecting another profile.                                                                                                                               |
+| Exact structured repositories and aggregate boundaries | **Accepted minimum** (P4) | Catalogue, lifecycle, Space CAS, nodes, four Canvas-log families, Tasks, and the ordered writer have reusable contracts. A rejected in-process node → record → optional-delta batch restores prestate; explicit title rename remains an earlier best-effort boundary. Crash recovery, unknown remote outcomes, idempotency, publication, and multi-process serialization are not promised.                       |
+| Node Markdown ownership                                | **Accepted** (P4)         | Authored node content remains with structured node records because it participates in revision CAS, search, and node mutation. Opaque and large bytes remain in BlobStore.                                                                                                                                                                                                                                       |
+| Blob key, staging, deletion, and GC semantics          | Proposed / open           | Names are the existing `<artifactId><ext>` keys; `deleteAll()` covers Space destruction. Staging, reference counting, and GC remain undesigned. Per-key deletion stays out of the public port, but the absence of any cleanup path is what makes atomic replace mandatory (§6.2).                                                                                                                                |
+| Space-handle identity and caching                      | **Corrected** (P1)        | `space(id)` returning a stable handle is bounded by the LRU behind it, not guaranteed. In-memory tombstones and the filename index are therefore adapter-local caches, never durable state (§12.1.1, §12.2.4).                                                                                                                                                                                                   |
+| Reaching one Space                                     | **Accepted** (§12.6)      | One `space(canvasId)` facade on the composition root joins both ports; the two ports keep their independence and are joined only where the cross-store rules already live. A capability only one backend has hangs off the same handle, named for that backend and typed by its absence — `diskTree`, `null` elsewhere (§6.4.1).                                                                                 |
+| Residual per-Space files                               | **Accepted** (§12.8)      | Four dispositions, not one: Disk-only and declared, portable and re-implemented, structured record, or blob (§6.4.2). Every current consumer is assigned in §6.4.3 and the ones that pay for themselves on Disk are built; what a second backend must pay for is named, not deferred silently.                                                                                                                   |
+| Backend selection scope                                | **Accepted** (§12.9)      | Backend selection and its connection/pool are process-global. Workspaces are namespaces inside the configured backend; activating another Workspace re-scopes repository/handle operations without dropping or reconnecting the backend. Implemented for SQLite: one connection, a `workspace_id` on every Space, and a retained handle that refuses after a switch rather than answering for the new namespace. |
+| Logical filesystem view                                | Open                      | A possible `SpaceFileView` above both stores; name and contract are not accepted yet.                                                                                                                                                                                                                                                                                                                            |
+| Real agent workspace                                   | Open                      | Materialized directory, OS mount, protocol-only access, or a combination remain under evaluation.                                                                                                                                                                                                                                                                                                                |
+| Agent-authored filesystem write-back                   | Open                      | Read-only projection, explicit checkout/commit, and live bidirectional sync are alternatives, not decisions.                                                                                                                                                                                                                                                                                                     |
 
 ## 3. Current system
 
@@ -182,9 +186,11 @@ and Azure Blob adapters do not yet exist.
   their product semantics are defined.
 - Implementing online backend migration, replication, backup, or disaster
   recovery.
-- Making a non-Disk adapter runtime-selectable. Phase 5 proves an isolated
-  adapter against the contracts without registering it in composition or
-  changing product capabilities.
+- Making **every** feature portable. Phase 5 makes a non-Disk adapter
+  selectable, which is a different claim: a selectable profile may serve fewer
+  features, as long as each missing one is declared in `capabilities.ts` and
+  refused in those words where a user reaches for it (§12.9.4). Emulating a
+  filesystem so that a file-shaped feature _nearly_ works stays out of scope.
 
 ## 6. Settled backend split and implemented minimum contracts
 
@@ -2527,36 +2533,56 @@ portable export format, a writable general-purpose virtual filesystem or OS
 mount, protocol or UI changes, and stronger crash/distributed transaction
 guarantees.
 
-### 12.9 Phase 5 — SQLite contract preview — **implemented**
+### 12.9 Phase 5 — SQLite as a selectable profile — **implemented**
 
-Phase 5 adds one non-Disk structured adapter to test whether the boundary
-survives a database implementation. It is an isolated implementation and test
-target, not a product profile. The composition root does not construct or
-export it, and `HUABU_STRUCTURED_BACKEND=sqlite` continues to fail during
-profile validation with a preview-specific diagnostic.
+Phase 5 adds a second structured backend and a second blob backend, and turns
+them on. The question it answers is not "does the boundary compile against a
+database" — §12.8's harness already asked that — but the harder one behind it:
+can a deployment run with **no Workspace folder and no Space directories at
+all**, and can it say plainly what it gives up by doing so.
+
+`HUABU_STRUCTURED_BACKEND=sqlite HUABU_BLOB_BACKEND=sqlite` is the profile.
+Everything durable — Workspaces, Spaces, nodes, events, changes, Tasks, blob
+bytes, extension namespaces, and agent conversations — lives in one file at
+`<data dir>/storage/sqlite/huabu.sqlite` (override with `HUABU_SQLITE_PATH`),
+beside the Disk backend's own registry at `<data dir>/storage/disk/`. Postgres
+and Azure Blob adapters still do not exist.
 
 #### 12.9.1 Scope and lifecycle
 
-- The adapter uses built-in `node:sqlite`, owns one explicit database filename
-  and connection, and adds no package or native-addon dependency.
-- Retained handles stay bound to that connection. `init`, `health`, and
-  `close` are real lifecycle operations; Workspace remounting and production
-  factory registration remain selectability work.
-- The current portable surface is implemented: Space listing/lifecycle and
-  `ensureWorld`, record read/write, node read/readMany/list/stream and
-  mutations, events, changes, Tasks/Runs including atomic completion, and the
-  extension substrate.
-- Postgres, Azure Blob, Disk-to-SQLite migration, RFS/file tools, external-note
-  watching, import/export, client/API changes, and product UI remain outside
-  this phase.
+- Built-in `node:sqlite`. No package, no native addon. That is not a
+  production driver decision (§5); it is what let this phase be about the
+  boundary rather than about dependencies.
+- One connection per process, shared by the structured store, the blob store,
+  and the Workspace repository — because they are one file, and two writers to
+  one SQLite file is a lock error rather than a queue. The connection opens in
+  WAL with `synchronous = NORMAL`, a bounded `busy_timeout`, and foreign keys
+  enforced.
+- Opening it is _synchronous_, so the composition root can hand out a
+  Workspace repository before `initStorage()` has been awaited — which managed
+  mode needs, and which is the reason the profile does not have to weaken the
+  `requiresExplicitInit` guard for anyone else.
+- A Workspace is a **row**. There is no folder to pick, so the first start
+  creates one and activates it; `activateWorkspace` re-points the connection's
+  namespace and reopens nothing. Handles bind the Workspace they were resolved
+  in and refuse afterwards, exactly as the Disk adapters refuse a retained
+  workspace path.
 
 #### 12.9.2 Schema and behavior
 
 Schema versioning uses `PRAGMA user_version`; migrations run transactionally,
 reject databases from the future, and create `STRICT` tables with foreign keys
-enabled. Version 1 stores Space records and World membership, complete node
-JSON with opaque revision tokens, ordered events, coalesced changes,
-Task/Run snapshots, extension namespaces, and the private delta journal.
+enabled. Version 1 holds Workspaces, Space records and World membership,
+complete node JSON with opaque revision tokens, ordered events, coalesced
+changes, Task/Run snapshots, extension namespaces, the private delta journal,
+and blob bytes.
+
+Blobs deliberately carry **no** foreign key to `spaces`. The two ports are
+configured independently and their lifecycles are joined only by the deletion
+saga in `storage.ts`, which sweeps every blob area _before_ the structured
+record goes; a foreign key would move that ordering decision into the schema
+and would refuse the orphan sweep the saga performs when a record is already
+missing.
 
 Every ordered Space write applies node mutations, record replacement, and the
 optional delta insert in one immediate transaction. Same-baseline writers have
@@ -2573,25 +2599,94 @@ old row cannot match the replacement. `write-suppressed` and
 `authoritativeInsert` remain valid adapter-specific parts of the common shape
 for Disk rather than requirements every SQL adapter must reproduce.
 
-The extension substrate returns the shared connection plus a stable,
-Space-owned namespace id. Owner tables can reference that id with
-`ON DELETE CASCADE`, preserving namespace isolation and cleanup without
-putting a generic key/value API in the storage port.
+Value encoding follows `JSON.stringify`, because Disk persists through that
+same function. An `undefined` own property is dropped rather than rejected;
+what is genuinely unrepresentable — a cycle, a non-finite number, a non-plain
+object — still rejects. The alternative was a record Disk accepts and SQLite
+refuses, which is §13's silent-divergence risk in its most ordinary form: an
+optional field spread onto a node.
 
-#### 12.9.3 Proof
+`remove()` on the Workspace repository is a **forget**, not a delete. The
+port's wording is "forget one member without deleting any Workspace-owned
+data", which Disk honours for free because the folder outlives the registry
+entry. A database has no second copy, so forgetting is a timestamp and the
+rows stay.
 
-The reusable structured contracts run against Disk and real temporary SQLite
-files. They cover fresh World bootstrap, store lifecycle, Space deletion
-admission, node CAS and read shapes, ordered transactional writes, event/change
-ordering, Task/Run completion, and extension isolation and cleanup. SQLite
-integration tests additionally cover strict schema creation, close/reopen
+#### 12.9.3 The extension substrate, and one synchronous exception
+
+The substrate is §6.4.4 as written: the port hands a namespace a connection
+plus a Space-owned parent row, owner tables reference it with
+`ON DELETE CASCADE`, and storage never sees what is in them. Three owners use
+it — memory bookkeeping, the debug prompt log, and the Agenetes conversation
+stores.
+
+The conversation stores forced one addition. Agenetes's three storage ports
+(thread table, Tier-1 event log, Tier-2 folded turns) are **synchronous**, and
+the port's `extension()` is async. Rather than have that owner keep a cache
+warmed from an unrelated code path, the composition root exposes
+`Space.sqliteTree` — a synchronous resolver, named for the backend that has
+it and `null` everywhere else, exactly like `Space.diskTree`. It has its own
+census in `module-boundaries.test.ts` with exactly one production consumer,
+because the only justification for it is that one owner's synchronous
+interface; a second consumer would mean the reason had drifted.
+
+The payoff is the thing a user would notice: an agent conversation in a Space
+that has no directory survives a restart, and is removed with its Space by the
+same cascade as everything else.
+
+#### 12.9.4 What this profile does not serve
+
+Six capabilities are Disk-only, declared in `storage/capabilities.ts`, logged
+at startup, and refused at their own call sites in the same words:
+
+| Capability                                    | What is lost                                        | Why it is not emulated                                                                                                                   |
+| --------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace-directory`                         | Choosing, creating, or revealing a Workspace folder | A Workspace is a row. The Server opens its own on first start; the client is told `canChangeWorkspace: false` and shows no picker.       |
+| `space-bundle-export` / `space-bundle-import` | `.huabu.zip` round-trip                             | The bundle _is_ the Space directory, archived. A portable export built from records plus reachable blob references is a separate design. |
+| `reveal-space-folder`                         | "Show me this in Finder"                            | Without a folder there is nothing to show.                                                                                               |
+| `builtin-file-tools`                          | The agent's `read`/`write`/`glob`/`grep` tools      | They sandbox on the Space directory. The first-party agent edits nodes through the Canvas tools instead.                                 |
+| `space-file-plane`                            | RFS, the HTTP file plane external agents mount      | Listed apart from the tools above because it is what they were previously said to fall back to. A Space with no file plane has neither.  |
+| `external-note-discovery`                     | Adopting Markdown dropped into a Space from outside | It watches for documents that arrived without going through the application. A database has no such arrival path.                        |
+| `workspace-user-memory`                       | `setting/user.md`, the cross-Space memory document  | Every blob scope is Space-scoped, so a Workspace-level document has nowhere to live yet. A Space's _own_ memory body is unaffected.      |
+| `workspace-user-skills`                       | `setting/skills/<id>/SKILL.md`                      | Same arrival path as external notes. Bundled and Agent Team skills are unaffected.                                                       |
+| `space-directory-handle-coordination`         | Windows rename-while-watched                        | No directory, no problem.                                                                                                                |
+
+Two further limits are not capability rows because nothing refuses them, they
+are simply properties of the backend:
+
+- **Blob size.** Bytes are a row read and written whole, so the profile is
+  sized for the documents and images a Space holds, not for arbitrarily large
+  media, and the database grows to the size of everything ever uploaded.
+  `materialize()` spools to the OS temp directory and unlinks on release —
+  which is what `BlobLease`'s post-release rule was written to keep honest.
+- **Multi-process access.** One process, one connection. WAL and
+  `busy_timeout` make a second reader survivable, and nothing here promises a
+  multi-process deletion fence or a distributed transaction.
+
+#### 12.9.5 Proof
+
+The reusable contracts — structured store, Space repository, nodes, ordered
+write, logs, Tasks, extension substrate, **blob store**, and **Workspace
+repository** — run against Disk and against real temporary SQLite files.
+
+`PRODUCT_STORAGE_PROFILES` gains `sqlite/sqlite`, so the §12.8 product-boundary
+suite runs unchanged against it: World bootstrap, Space creation, ordered
+writes through every node read shape, version conflict, bytes in every area,
+the cross-store put guard, extension isolation and cleanup, the log families,
+the Task ledger, deletion, World protection, and — added here — that all of it
+is still there after a restart. That suite names no directory and no filename;
+`module-boundaries.test.ts` enforces that mechanically.
+
+SQLite integration tests additionally cover strict schema creation, WAL and
+foreign-key pragmas read back on a second connection, close/reopen
 persistence, an immutable v1 fixture, future-version rejection, migration
-rollback, SQL fault injection, foreign-key cascades, and revision safety across
-delete/recreate.
-
-The preview changes only the storage implementation, contracts, focused type
-narrowing for the new substrate union, and this documentation. Runtime
-composition and product capability owners remain unchanged.
+rollback, SQL fault injection, foreign-key cascades, revision safety across
+delete/recreate, `JSON.stringify` encoding parity, incremental streaming and
+early abort, batched `readMany`, Workspace scoping and handle invalidation
+across a switch, forget-without-delete, and blob byte fidelity, lease
+lifetime, and Workspace isolation. The Agenetes conversation stores have their
+own suite against a mounted profile, covering round-trip, isolation, restart,
+and destruction with the Space.
 
 ### 12.10 Later phases — provisional
 
