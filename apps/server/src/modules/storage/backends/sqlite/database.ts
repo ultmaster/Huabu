@@ -1,8 +1,28 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+/**
+ * The one SQLite connection a process holds, and the state that lives as long
+ * as it does.
+ *
+ * Both storage axes share this object when the profile selects SQLite for
+ * either of them. That is not a convenience: the structured records and the
+ * blob bytes are in one database file, so two connections would be two
+ * writers to the same file, and SQLite's answer to that is a lock error rather
+ * than a queue. One connection also makes the ordered Space write a real
+ * transaction across everything it touches.
+ *
+ * The active Workspace is held here for the same reason the Disk adapters hold
+ * the active workspace path: it is the namespace every query is scoped to.
+ * Switching Workspaces re-points this field and reopens nothing — the settled
+ * "Backend selection scope" decision in proposal §2.
+ */
+
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { SQLITE_MIGRATIONS, type SqliteMigration } from './schema.js';
 import {
   assertSpaceMutationAllowed,
   beginSpaceDeleteAdmission,
@@ -10,85 +30,20 @@ import {
 
 import type { StorageHealth } from '../../ports/common.js';
 
-export const SQLITE_SCHEMA_VERSION = 1;
+export { SQLITE_MIGRATIONS, SQLITE_SCHEMA_VERSION } from './schema.js';
+export type { SqliteMigration } from './schema.js';
+
+/**
+ * The collision key the hidden World Space is filed under.
+ *
+ * Unreachable from any user title: `toSafeFilename` strips leading dots, so
+ * no requested name normalizes to it and the World slot cannot be taken by
+ * an ordinary Space.
+ */
 export const SQLITE_WORLD_COLLISION_KEY = '.world';
 
-const SCHEMA_V1 = `
-  CREATE TABLE spaces (
-    canvas_id TEXT PRIMARY KEY,
-    title TEXT,
-    collision_key TEXT NOT NULL UNIQUE,
-    version INTEGER NOT NULL,
-    state_json TEXT NOT NULL CHECK (json_valid(state_json)),
-    created_at REAL NOT NULL,
-    updated_at REAL NOT NULL,
-    is_world INTEGER NOT NULL DEFAULT 0 CHECK (is_world IN (0, 1))
-  ) STRICT;
-
-  CREATE UNIQUE INDEX spaces_single_world
-    ON spaces(is_world)
-    WHERE is_world = 1;
-
-  CREATE TABLE nodes (
-    canvas_id TEXT NOT NULL,
-    node_id TEXT NOT NULL,
-    record_json TEXT NOT NULL CHECK (json_valid(record_json)),
-    revision TEXT NOT NULL CHECK (length(revision) > 0),
-    label_collision_key TEXT NOT NULL,
-    PRIMARY KEY (canvas_id, node_id),
-    UNIQUE (canvas_id, label_collision_key),
-    FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-
-  CREATE TABLE events (
-    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    canvas_id TEXT NOT NULL,
-    event_json TEXT NOT NULL CHECK (json_valid(event_json)),
-    FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-
-  CREATE INDEX events_by_canvas_order
-    ON events(canvas_id, event_id);
-
-  CREATE TABLE changes (
-    canvas_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
-    PRIMARY KEY (canvas_id, thread_id),
-    FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-
-  CREATE TABLE tasks (
-    canvas_id TEXT PRIMARY KEY,
-    snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
-    FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-
-  CREATE TABLE space_extensions (
-    extension_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    canvas_id TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    UNIQUE (canvas_id, namespace),
-    FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-
-  CREATE TABLE delta_log (
-    canvas_id TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    entry_json TEXT NOT NULL CHECK (json_valid(entry_json)),
-    PRIMARY KEY (canvas_id, version),
-    FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-`;
-
-export interface SqliteMigration {
-  readonly version: number;
-  readonly sql: string;
-}
-
-export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = Object.freeze([
-  Object.freeze({ version: 1, sql: SCHEMA_V1 }),
-]);
+/** Milliseconds a statement waits for a lock before reporting SQLITE_BUSY. */
+const BUSY_TIMEOUT_MS = 5_000;
 
 function readUserVersion(database: DatabaseSync): number {
   const row = database.prepare('PRAGMA user_version').get();
@@ -146,18 +101,33 @@ export function applySqliteMigrations(
   }
 }
 
+/** Raised when a handle outlives the Workspace it was resolved in. */
+export class SqliteWorkspaceScopeError extends Error {
+  override name = 'SqliteWorkspaceScopeError';
+}
+
 /** One connection and all adapter-lifetime process-local state. */
 export class SqliteStoreContext {
   readonly now: () => number;
 
   readonly #database: DatabaseSync;
+  readonly #filename: string;
   readonly #admissionScope: string;
   #state: 'new' | 'open' | 'closed' = 'new';
+  #workspaceId: string | null = null;
 
-  constructor(filename: string, now: () => number) {
+  constructor(filename: string, now: () => number = Date.now) {
+    if (typeof filename !== 'string' || filename.length === 0) {
+      throw new TypeError('SQLite filename must be a non-empty string');
+    }
     this.now = now;
+    this.#filename = filename;
     this.#admissionScope = `sqlite:${filename}`;
     this.#database = new DatabaseSync(filename, { open: false });
+  }
+
+  get filename(): string {
+    return this.#filename;
   }
 
   init(): void {
@@ -167,7 +137,27 @@ export class SqliteStoreContext {
     }
 
     try {
+      // A database file names a directory that may not exist yet — the whole
+      // point of this profile is that the operator never had to create one.
+      // In-memory and URI filenames name no directory at all.
+      const directory = path.dirname(this.#filename);
+      if (
+        !this.#filename.startsWith(':') &&
+        !this.#filename.startsWith('file:')
+      ) {
+        mkdirSync(directory, { recursive: true });
+      }
       this.#database.open();
+      // Write-ahead logging so a reader is never blocked by the writer, and a
+      // bounded wait so a second connection (an external tool, a stale
+      // process) reports a busy database instead of failing instantly.
+      this.#database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+      this.#database.exec('PRAGMA journal_mode = WAL');
+      // NORMAL is the documented pairing for WAL: durable across a process
+      // crash, and only a machine-level crash can lose the most recent
+      // commits — which is the same guarantee the Disk adapter's atomic
+      // renames give, stated rather than assumed.
+      this.#database.exec('PRAGMA synchronous = NORMAL');
       this.#database.exec('PRAGMA foreign_keys = ON');
       const foreignKeys = this.#database.prepare('PRAGMA foreign_keys').get()?.[
         'foreign_keys'
@@ -220,6 +210,51 @@ export class SqliteStoreContext {
       );
     }
   }
+
+  // ─── The active Workspace ────────────────────────────────────────────────
+
+  /** Point every subsequent query at one Workspace. Reopens nothing. */
+  useWorkspace(workspaceId: string | null): void {
+    this.#workspaceId = workspaceId;
+  }
+
+  /** The active Workspace id, or `null` when none has been selected. */
+  activeWorkspaceId(): string | null {
+    return this.#workspaceId;
+  }
+
+  /** The active Workspace id, or a refusal when none has been selected. */
+  workspaceId(): string {
+    this.assertOpen();
+    if (this.#workspaceId === null) {
+      throw new SqliteWorkspaceScopeError(
+        'No Workspace is active on the SQLite backend. Activate one before ' +
+          'reading or writing Spaces.',
+      );
+    }
+    return this.#workspaceId;
+  }
+
+  /**
+   * The Workspace a retained handle was resolved in, or a refusal.
+   *
+   * A handle keeps the id it was built with and re-checks it here, so a
+   * Workspace switch makes the stale handle reject rather than silently
+   * addressing rows in the newly active namespace. That is the same rule the
+   * Disk adapters apply to a retained workspace path.
+   */
+  assertBoundWorkspace(boundWorkspaceId: string, what: string): string {
+    const active = this.workspaceId();
+    if (active !== boundWorkspaceId) {
+      throw new SqliteWorkspaceScopeError(
+        `${what} belongs to an inactive Workspace. Resolve a fresh handle ` +
+          'after Workspace activation.',
+      );
+    }
+    return active;
+  }
+
+  // ─── Space lifecycle admission ───────────────────────────────────────────
 
   assertMutationAllowed(canvasId: string): void {
     this.assertOpen();

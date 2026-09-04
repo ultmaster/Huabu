@@ -41,6 +41,7 @@ import {
 } from './space-preview-scene.js';
 import {
   assertWorldPortalTopologyAllowed,
+  readLiveSpaceIds,
   WorldPortalMutationError,
 } from './world-portal-policy.js';
 import { reconcileWorldPortals } from './world-portals.js';
@@ -52,11 +53,11 @@ import { MAX_UPLOAD_BYTES } from '../../upload-limits.js';
 import { ARTIFACT_URL_REGEX } from '../artifact/utils.js';
 import { getPreprocessDispatcher, getProfile } from '../preprocessing/index.js';
 import { stripOfficeparserPreamble } from '../preprocessing/loaders/office-strip.js';
-import { isWorldCanvasId } from '../storage/canvas-dirs.js';
 import {
   space,
   createSpace,
   deleteSpace,
+  isWorldCanvasId,
   stageSpaceImport,
   unavailableCapabilityMessage,
   getStructuredStore,
@@ -1184,6 +1185,9 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         canvasId,
         (existing?.state.nodes ?? []) as NodeLike[],
         incomingState.nodes ?? [],
+        isWorldCanvasId(canvasId)
+          ? await readLiveSpaceIds()
+          : new Set<string>(),
       );
     } catch (error) {
       if (error instanceof WorldPortalMutationError) {

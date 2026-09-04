@@ -8,6 +8,7 @@ import { allocateSpaceIdentity, collisionKeyForTitle } from './identity.js';
 import {
   decodeSpaceRow,
   insertSpaceRow,
+  occupiedCollisionKeys,
   readSpaceRow,
   SPACE_COLUMNS,
 } from './rows.js';
@@ -26,6 +27,24 @@ import type {
   SpaceRepository,
 } from '../../ports/structured.js';
 import type { CanvasSummary } from '@huabu/shared';
+import type { DatabaseSync } from 'node:sqlite';
+
+/**
+ * Whether this Space id is taken anywhere in the database.
+ *
+ * Space ids are the primary key across every Workspace, so creation has to ask
+ * globally even though everything else is scoped.
+ */
+function spaceRowExistsAnywhere(
+  database: DatabaseSync,
+  canvasId: string,
+): boolean {
+  return (
+    database
+      .prepare('SELECT 1 AS present FROM spaces WHERE canvas_id = ?')
+      .get(canvasId)?.['present'] === 1
+  );
+}
 
 function validateTitle(title: unknown): asserts title is string | null {
   if (title !== null && typeof title !== 'string') {
@@ -35,16 +54,35 @@ function validateTitle(title: unknown): asserts title is string | null {
 
 export class SqliteSpaceRepository implements SpaceRepository {
   readonly #context: SqliteStoreContext;
+  readonly #workspaceId: string;
 
   constructor(context: SqliteStoreContext) {
     this.#context = context;
+    // Bound at construction, like the Disk repository binds the workspace
+    // path: one repository instance spans a caller's read and its follow-up
+    // write, and a Workspace switch in between must reject rather than
+    // silently retarget the write.
+    this.#workspaceId = context.workspaceId();
+  }
+
+  /** The Workspace every query below is scoped to, re-checked per call. */
+  #workspace(): string {
+    return this.#context.assertBoundWorkspace(
+      this.#workspaceId,
+      'SQLite Space repository',
+    );
   }
 
   async list(): Promise<CanvasSummary[]> {
+    const workspaceId = this.#workspace();
     const database = this.#context.database();
     return database
-      .prepare(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE is_world = 0`)
-      .all()
+      .prepare(
+        `SELECT ${SPACE_COLUMNS}
+         FROM spaces
+         WHERE workspace_id = ? AND is_world = 0`,
+      )
+      .all(workspaceId)
       .map((row) => {
         const { record } = decodeSpaceRow(row);
         return {
@@ -58,10 +96,15 @@ export class SqliteSpaceRepository implements SpaceRepository {
   }
 
   async worldId(): Promise<string> {
+    const workspaceId = this.#workspace();
     const database = this.#context.database();
     const rows = database
-      .prepare(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE is_world = 1`)
-      .all();
+      .prepare(
+        `SELECT ${SPACE_COLUMNS}
+         FROM spaces
+         WHERE workspace_id = ? AND is_world = 1`,
+      )
+      .all(workspaceId);
     if (rows.length !== 1) {
       throw new Error(
         rows.length === 0
@@ -75,11 +118,16 @@ export class SqliteSpaceRepository implements SpaceRepository {
   }
 
   async ensureWorld(): Promise<string> {
+    const workspaceId = this.#workspace();
     const database = this.#context.database();
     return withImmediateTransaction(database, () => {
       const existing = database
-        .prepare(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE is_world = 1`)
-        .all();
+        .prepare(
+          `SELECT ${SPACE_COLUMNS}
+           FROM spaces
+           WHERE workspace_id = ? AND is_world = 1`,
+        )
+        .all(workspaceId);
       if (existing.length > 1) {
         throw new Error('SQLite namespace has multiple World Spaces');
       }
@@ -96,6 +144,7 @@ export class SqliteSpaceRepository implements SpaceRepository {
       }
       insertSpaceRow(
         database,
+        workspaceId,
         {
           canvasId,
           title: 'World',
@@ -114,19 +163,22 @@ export class SqliteSpaceRepository implements SpaceRepository {
   async create(input: SpaceCreateInput): Promise<SpaceCreateResult> {
     const canvasId = sanitizeId(input.canvasId, 'canvasId');
     validateTitle(input.title);
+    const workspaceId = this.#workspace();
     this.#context.assertMutationAllowed(canvasId);
     const database = this.#context.database();
 
     return withImmediateTransaction(database, () => {
-      if (readSpaceRow(database, canvasId) !== null) {
+      // Existence is checked across every Workspace, not just the active one:
+      // `canvas_id` is the primary key, so an id already used elsewhere is
+      // taken here too, and reporting it as free would fail on INSERT.
+      if (spaceRowExistsAnywhere(database, canvasId)) {
         return { ok: false as const, reason: 'already-exists' as const };
       }
-      const occupied = database
-        .prepare('SELECT collision_key FROM spaces')
-        .all()
-        .map((row) => row['collision_key'])
-        .filter((value): value is string => typeof value === 'string');
-      const identity = allocateSpaceIdentity(input.title, canvasId, occupied);
+      const identity = allocateSpaceIdentity(
+        input.title,
+        canvasId,
+        occupiedCollisionKeys(database, workspaceId),
+      );
       const timestamp = this.#context.now();
       if (!Number.isFinite(timestamp)) {
         throw new TypeError('SQLite Space clock returned a non-finite value');
@@ -139,14 +191,19 @@ export class SqliteSpaceRepository implements SpaceRepository {
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      insertSpaceRow(database, record, identity.collisionKey);
+      insertSpaceRow(database, workspaceId, record, identity.collisionKey);
       return { ok: true as const, record };
     });
   }
 
   async beginDelete(input: SpaceDeleteInput): Promise<SpaceBeginDeleteResult> {
     const canvasId = sanitizeId(input.canvasId, 'canvasId');
-    const beforeAdmission = readSpaceRow(this.#context.database(), canvasId);
+    const workspaceId = this.#workspace();
+    const beforeAdmission = readSpaceRow(
+      this.#context.database(),
+      workspaceId,
+      canvasId,
+    );
     if (beforeAdmission?.isWorld) {
       return { ok: false, reason: 'world-forbidden' };
     }
@@ -154,7 +211,11 @@ export class SqliteSpaceRepository implements SpaceRepository {
     const release = await this.#context.acquireDelete(canvasId);
     let sessionOwnsGate = false;
     try {
-      const afterAdmission = readSpaceRow(this.#context.database(), canvasId);
+      const afterAdmission = readSpaceRow(
+        this.#context.database(),
+        workspaceId,
+        canvasId,
+      );
       if (afterAdmission?.isWorld) {
         return { ok: false, reason: 'world-forbidden' };
       }
@@ -175,7 +236,7 @@ export class SqliteSpaceRepository implements SpaceRepository {
             this.#context.assertOpen();
             const database = this.#context.database();
             const result = withImmediateTransaction(database, () => {
-              const current = readSpaceRow(database, canvasId);
+              const current = readSpaceRow(database, workspaceId, canvasId);
               if (current?.isWorld) {
                 throw new Error(`Refusing to delete World Space ${canvasId}`);
               }
@@ -186,8 +247,10 @@ export class SqliteSpaceRepository implements SpaceRepository {
               }
               const deleted = Number(
                 database
-                  .prepare('DELETE FROM spaces WHERE canvas_id = ?')
-                  .run(canvasId).changes,
+                  .prepare(
+                    'DELETE FROM spaces WHERE workspace_id = ? AND canvas_id = ?',
+                  )
+                  .run(workspaceId, canvasId).changes,
               );
               return { deleted: deleted === 1 };
             });
@@ -222,11 +285,12 @@ export class SqliteSpaceRepository implements SpaceRepository {
   async rename(input: SpaceRenameInput): Promise<SpaceRenameResult> {
     const canvasId = sanitizeId(input.canvasId, 'canvasId');
     validateTitle(input.title);
+    const workspaceId = this.#workspace();
     this.#context.assertMutationAllowed(canvasId);
     const database = this.#context.database();
 
     return withImmediateTransaction(database, () => {
-      const current = readSpaceRow(database, canvasId);
+      const current = readSpaceRow(database, workspaceId, canvasId);
       if (current === null) return { ok: false, reason: 'not-found' } as const;
       if (current.isWorld) {
         return { ok: false, reason: 'world-forbidden' } as const;
@@ -241,9 +305,9 @@ export class SqliteSpaceRepository implements SpaceRepository {
           .prepare(
             `SELECT ${SPACE_COLUMNS}
              FROM spaces
-             WHERE collision_key = ? AND canvas_id <> ?`,
+             WHERE workspace_id = ? AND collision_key = ? AND canvas_id <> ?`,
           )
-          .get(collisionKey, canvasId);
+          .get(workspaceId, collisionKey, canvasId);
         if (conflict !== undefined) {
           return {
             ok: false,
@@ -257,9 +321,9 @@ export class SqliteSpaceRepository implements SpaceRepository {
         .prepare(
           `UPDATE spaces
            SET title = ?, collision_key = ?
-           WHERE canvas_id = ?`,
+           WHERE workspace_id = ? AND canvas_id = ?`,
         )
-        .run(input.title, collisionKey, canvasId);
+        .run(input.title, collisionKey, workspaceId, canvasId);
       if (Number(result.changes) !== 1) {
         throw new Error(`Could not rename SQLite Space ${canvasId}`);
       }

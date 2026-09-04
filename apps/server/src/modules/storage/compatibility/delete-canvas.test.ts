@@ -42,6 +42,7 @@ const workspaceState = vi.hoisted(() => ({ path: '', leaseCount: 0 }));
 
 vi.mock('../../workspace.js', () => ({
   getWorkspacePath: () => workspaceState.path,
+  getWorkspaceKey: () => workspaceState.path,
   acquireWorkspaceOperationLease: () => {
     const workspacePath = workspaceState.path;
     workspaceState.leaseCount += 1;

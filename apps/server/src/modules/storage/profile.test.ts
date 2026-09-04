@@ -35,7 +35,7 @@ describe('parseStorageProfile', () => {
 
   it('names the supported set when a kind is unknown', () => {
     expect(() => parseStorageProfile({ HUABU_BLOB_BACKEND: 's3' })).toThrow(
-      /HUABU_BLOB_BACKEND="s3".*disk, azure/s,
+      /HUABU_BLOB_BACKEND="s3".*disk, sqlite, azure/s,
     );
   });
 
@@ -67,13 +67,34 @@ describe('validateStorageProfile', () => {
     ).toThrow(/not implemented yet.*disk, sqlite/s);
   });
 
-  it('rejects an available preview adapter that is not selectable', () => {
+  it('accepts the sqlite + sqlite profile', () => {
+    expect(() =>
+      validateStorageProfile({
+        structured: { kind: 'sqlite' },
+        blobs: { kind: 'sqlite' },
+      }),
+    ).not.toThrow();
+  });
+
+  // Fewer features is a stated limitation, not a misconfiguration: a
+  // selectable profile may lose capabilities as long as the matrix declares
+  // them. Only an unimplemented or incoherent pairing fails here.
+  it('accepts sqlite records beside disk blobs', () => {
     expect(() =>
       validateStorageProfile({
         structured: { kind: 'sqlite' },
         blobs: { kind: 'disk' },
       }),
-    ).toThrow(/preview adapter.*not selectable yet.*Selectable: disk/s);
+    ).not.toThrow();
+  });
+
+  it('rejects sqlite blobs without the sqlite structured database', () => {
+    expect(() =>
+      validateStorageProfile({
+        structured: { kind: 'disk' },
+        blobs: { kind: 'sqlite' },
+      }),
+    ).toThrow(/requires HUABU_STRUCTURED_BACKEND=sqlite/);
   });
 
   it('rejects a known but unimplemented blob backend', () => {
@@ -82,7 +103,7 @@ describe('validateStorageProfile', () => {
         structured: { kind: 'disk' },
         blobs: { kind: 'azure' },
       }),
-    ).toThrow(/not implemented yet.*disk/s);
+    ).toThrow(/not implemented yet.*disk, sqlite/s);
   });
 });
 
@@ -102,7 +123,7 @@ describe('requiresExplicitInit', () => {
 
   it.each([
     { structured: { kind: 'postgres' }, blobs: { kind: 'disk' } },
-    { structured: { kind: 'sqlite' }, blobs: { kind: 'disk' } },
+    { structured: { kind: 'sqlite' }, blobs: { kind: 'sqlite' } },
     { structured: { kind: 'disk' }, blobs: { kind: 'azure' } },
   ] as const)('requires an awaited init for %j', (profile) => {
     expect(requiresExplicitInit(profile)).toBe(true);

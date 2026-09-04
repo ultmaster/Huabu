@@ -1,22 +1,38 @@
--- Immutable SQLite structured-store schema v1 fixture.
--- Add a new fixture for later schema versions; do not rewrite this history.
+-- Immutable SQLite storage schema v1 fixture.
+--
+-- Hand-written to match `schema.ts`'s version 1 exactly, and never rewritten
+-- once a version ships: the point of the fixture is to prove that opening an
+-- existing database migrates and reads it rather than reshaping it. A later
+-- schema version gets its own fixture beside this one.
 
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
 
+CREATE TABLE workspaces (
+  workspace_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  last_opened_at REAL NOT NULL,
+  forgotten_at REAL
+) STRICT;
+
 CREATE TABLE spaces (
   canvas_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
   title TEXT,
-  collision_key TEXT NOT NULL UNIQUE,
+  collision_key TEXT NOT NULL,
   version INTEGER NOT NULL,
   state_json TEXT NOT NULL CHECK (json_valid(state_json)),
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
-  is_world INTEGER NOT NULL DEFAULT 0 CHECK (is_world IN (0, 1))
+  is_world INTEGER NOT NULL DEFAULT 0 CHECK (is_world IN (0, 1)),
+  UNIQUE (workspace_id, collision_key),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id)
+    ON DELETE CASCADE
 ) STRICT;
 
 CREATE UNIQUE INDEX spaces_single_world
-  ON spaces(is_world)
+  ON spaces(workspace_id)
   WHERE is_world = 1;
 
 CREATE TABLE nodes (
@@ -70,19 +86,34 @@ CREATE TABLE delta_log (
   FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE blobs (
+  workspace_id TEXT NOT NULL,
+  canvas_id TEXT NOT NULL,
+  area TEXT NOT NULL,
+  name TEXT NOT NULL,
+  bytes BLOB NOT NULL,
+  size INTEGER NOT NULL,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (workspace_id, canvas_id, area, name)
+) STRICT;
+
+INSERT INTO workspaces (
+  workspace_id, name, created_at, last_opened_at, forgotten_at
+) VALUES ('fixture-workspace', 'Fixture Workspace', 1, 1, NULL);
+
 INSERT INTO spaces (
-  canvas_id, title, collision_key, version, state_json,
+  canvas_id, workspace_id, title, collision_key, version, state_json,
   created_at, updated_at, is_world
 ) VALUES (
-  'fixture-world', 'World', '.world', 0,
+  'fixture-world', 'fixture-workspace', 'World', '.world', 0,
   '{"nodes":[],"edges":[]}', 1, 1, 1
 );
 
 INSERT INTO spaces (
-  canvas_id, title, collision_key, version, state_json,
+  canvas_id, workspace_id, title, collision_key, version, state_json,
   created_at, updated_at, is_world
 ) VALUES (
-  'fixture-space', 'Fixture Space', 'fixture space', 3,
+  'fixture-space', 'fixture-workspace', 'Fixture Space', 'fixture space', 3,
   '{"nodes":[{"id":"fixture-node","type":"note"}],"edges":[]}',
   10, 13, 0
 );
@@ -111,6 +142,13 @@ INSERT INTO tasks (canvas_id, snapshot_json) VALUES (
 INSERT INTO delta_log (canvas_id, version, entry_json) VALUES (
   'fixture-space', 3,
   '{"version":3,"ts":13,"commands":[],"deltas":[],"originator":{"source":"system"}}'
+);
+
+INSERT INTO blobs (
+  workspace_id, canvas_id, area, name, bytes, size, updated_at
+) VALUES (
+  'fixture-workspace', 'fixture-space', 'artifacts', 'fixture.txt',
+  CAST('fixture bytes' AS BLOB), 13, 14
 );
 
 PRAGMA user_version = 1;

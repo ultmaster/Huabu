@@ -300,6 +300,10 @@ describe('workspace module names no backend', () => {
  */
 describe('Disk Space tree capability', () => {
   const EXPECTED_CONSUMERS = [
+    // A — external-note discovery. The watcher asks whether this Space has a
+    // directory to watch at all; `null` is the whole of its behaviour off
+    // Disk.
+    'modules/canvas/external-watcher.ts',
     // A — the built-in file tools' sandbox root.
     'modules/agent/tools/handlers/fs-sandbox.ts',
     // A — bundle export.
@@ -315,6 +319,25 @@ describe('Disk Space tree capability', () => {
     // memory body and the RFS access guide into blob scopes.
     'modules/workspace/paths.ts',
   ].sort();
+
+  /**
+   * `sqliteTree` is the same kind of thing as `diskTree` and gets the same
+   * fence. It is narrower on purpose: the *only* reason it exists rather than
+   * the port's async `extension()` is that Agenetes's storage ports are
+   * synchronous, so exactly one owner should ever appear here.
+   */
+  const EXPECTED_SQLITE_CONSUMERS = [
+    'modules/agent/agenetes/sqlite-stores.ts',
+  ].sort();
+
+  it('keeps the exact synchronous SQLite substrate census', () => {
+    const consumers = sourceFiles
+      .filter((file) => !file.startsWith('modules/storage/'))
+      .filter((file) => !file.endsWith('.test.ts'))
+      .filter((file) => /\bsqliteTree\b/.test(read(file)));
+
+    expect(consumers.sort()).toEqual(EXPECTED_SQLITE_CONSUMERS);
+  });
 
   it('keeps the exact production consumer census', () => {
     // Matched as a bare word, not as `.diskTree`: destructuring the member
@@ -606,10 +629,7 @@ describe('root forwarding shims', () => {
     'storage/canvas-dirs.js': [
       'modules/agent/tools/world-target-read.test.ts',
       'modules/canvas/canvas-command-router.test.ts',
-      'modules/canvas/canvas.route.ts',
       'modules/canvas/external-watcher.test.ts',
-      'modules/canvas/external-watcher.ts',
-      'modules/canvas/world-portal-policy.ts',
       'modules/canvas/world-portals.test.ts',
       'modules/canvas/world-reference-resolver.test.ts',
       'modules/workspace.ts',

@@ -61,9 +61,11 @@ import { importForeignNodeSources } from './import-node-src.js';
 import {
   assertWorldPortalMutationsAllowed,
   assertWorldPortalResultAllowed,
+  readLiveSpaceIds,
 } from './world-portal-policy.js';
 import { getLogger } from '../../utils/logger.js';
 import {
+  isWorldCanvasId,
   space,
   withCanvasMutex,
   type BlobScope,
@@ -73,6 +75,9 @@ import {
   type NodeSnapshot,
   type SpaceNodeMutation,
 } from '../storage/index.js';
+
+/** Reused for every Space that cannot hold a Portal, which is all but one. */
+const EMPTY_CANVAS_IDS: ReadonlySet<string> = new Set<string>();
 
 const log = getLogger('canvas.executor');
 
@@ -731,11 +736,18 @@ export async function executeOnServerAlreadyLocked(
   );
   const prestateEdges = (canvas.state.edges ?? []) as CanvasEdge[];
 
+  // Only the World's rules consult it, and only the World can hold Portals,
+  // so an ordinary Space never pays for the catalogue read.
+  const liveCanvasIds = isWorldCanvasId(canvasId)
+    ? await readLiveSpaceIds()
+    : EMPTY_CANVAS_IDS;
+
   assertWorldPortalMutationsAllowed(
     canvasId,
     commands,
     prestateNodes,
     originator.source,
+    liveCanvasIds,
   );
 
   if (originator.source === 'agent') {
@@ -834,7 +846,12 @@ export async function executeOnServerAlreadyLocked(
   const sharedOut = applySharedPostEffectsFromWriteResult(writeResult);
   const finalNodes = writeResult.nodes;
   const finalEdges = sharedOut.edges;
-  assertWorldPortalResultAllowed(canvasId, prestateNodes, finalNodes);
+  assertWorldPortalResultAllowed(
+    canvasId,
+    prestateNodes,
+    finalNodes,
+    liveCanvasIds,
+  );
 
   const deltas = diffCanvasState(
     { nodes: prestateNodes, edges: prestateEdges },

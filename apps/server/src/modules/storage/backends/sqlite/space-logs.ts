@@ -8,7 +8,7 @@ import {
 } from '@huabu/shared/canvas-engine';
 
 import { withImmediateTransaction } from './database.js';
-import { parseJson, stringifyJson } from './rows.js';
+import { parseJson, spaceRowExists, stringifyJson } from './rows.js';
 import { sanitizeId } from '../../../../utils/fs.js';
 
 import type { SqliteStoreContext } from './database.js';
@@ -27,14 +27,13 @@ function firstIssue(error: z.ZodError): string {
   return `${location}: ${issue.message}`;
 }
 
-function requireSpace(context: SqliteStoreContext, canvasId: string): void {
+function requireSpace(
+  context: SqliteStoreContext,
+  workspaceId: string,
+  canvasId: string,
+): void {
   context.assertMutationAllowed(canvasId);
-  if (
-    context
-      .database()
-      .prepare('SELECT 1 AS present FROM spaces WHERE canvas_id = ?')
-      .get(canvasId)?.['present'] !== 1
-  ) {
+  if (!spaceRowExists(context.database(), workspaceId, canvasId)) {
     throw new Error(
       `SQLite Space logs(${canvasId}) cannot mutate a missing Space`,
     );
@@ -81,14 +80,28 @@ export interface SqliteSpaceLogs {
 
 class SqliteSpaceLogCoordinator {
   readonly #context: SqliteStoreContext;
+  readonly #workspaceId: string;
   readonly #canvasId: string;
 
-  constructor(context: SqliteStoreContext, canvasId: string) {
+  constructor(
+    context: SqliteStoreContext,
+    workspaceId: string,
+    canvasId: string,
+  ) {
     this.#context = context;
+    this.#workspaceId = workspaceId;
     this.#canvasId = canvasId;
   }
 
+  #workspace(): string {
+    return this.#context.assertBoundWorkspace(
+      this.#workspaceId,
+      `SQLite Space logs(${this.#canvasId})`,
+    );
+  }
+
   async readEvents(limit?: number): Promise<CanvasEvent[]> {
+    this.#workspace();
     const database = this.#context.database();
     if (limit !== undefined && !(limit > 0)) return [];
     if (limit === undefined || !Number.isFinite(limit)) {
@@ -118,6 +131,7 @@ class SqliteSpaceLogCoordinator {
 
   async appendEvents(events: readonly NewCanvasEvent[]): Promise<void> {
     this.#context.assertOpen();
+    const workspaceId = this.#workspace();
     if (events.length === 0) return;
     const records: CanvasEvent[] = events.map((event, index) => {
       const input = canvasEventInputSchema.safeParse(event);
@@ -140,7 +154,7 @@ class SqliteSpaceLogCoordinator {
       return record;
     });
 
-    requireSpace(this.#context, this.#canvasId);
+    requireSpace(this.#context, workspaceId, this.#canvasId);
     const database = this.#context.database();
     withImmediateTransaction(database, () => {
       const insert = database.prepare(
@@ -157,6 +171,7 @@ class SqliteSpaceLogCoordinator {
 
   async readChanges(threadIdInput: string): Promise<CanvasChangeRecord[]> {
     const threadId = sanitizeId(threadIdInput, 'threadId');
+    this.#workspace();
     const row = this.#context
       .database()
       .prepare(
@@ -176,7 +191,7 @@ class SqliteSpaceLogCoordinator {
   ): Promise<CanvasChangeRecord[]> {
     const threadId = sanitizeId(threadIdInput, 'threadId');
     stringifyJson(records, `Changes for thread ${JSON.stringify(threadId)}`);
-    requireSpace(this.#context, this.#canvasId);
+    requireSpace(this.#context, this.#workspace(), this.#canvasId);
     const database = this.#context.database();
     return withImmediateTransaction(database, () => {
       const current = database
@@ -212,7 +227,7 @@ class SqliteSpaceLogCoordinator {
     changeId: string,
   ): Promise<CanvasChangeRecord | null> {
     const threadId = sanitizeId(threadIdInput, 'threadId');
-    requireSpace(this.#context, this.#canvasId);
+    requireSpace(this.#context, this.#workspace(), this.#canvasId);
     const database = this.#context.database();
     return withImmediateTransaction(database, () => {
       const current = database
@@ -249,9 +264,14 @@ class SqliteSpaceLogCoordinator {
 
 export function createSqliteSpaceLogs(
   context: SqliteStoreContext,
+  workspaceId: string,
   canvasId: string,
 ): SqliteSpaceLogs {
-  const coordinator = new SqliteSpaceLogCoordinator(context, canvasId);
+  const coordinator = new SqliteSpaceLogCoordinator(
+    context,
+    workspaceId,
+    canvasId,
+  );
   return Object.freeze({
     events: Object.freeze({
       read: (limit?: number) => coordinator.readEvents(limit),

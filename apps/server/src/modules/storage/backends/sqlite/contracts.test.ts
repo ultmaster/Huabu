@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { SqliteStructuredStore } from './structured-store.js';
+import { SqliteBlobStore } from './blob-store.js';
+import { SqliteStoreContext } from './database.js';
 import {
   createSqliteTestFile,
   installDeltaAbortTrigger,
@@ -9,6 +10,8 @@ import {
   openSqliteTestStore,
   readSqliteDeltaLog,
 } from './test-support.js';
+import { SqliteWorkspaceRepository } from './workspace-repository.js';
+import { describeBlobStoreContract } from '../../ports/contracts/blob-store.contract.js';
 import { describeSpaceExtensionContract } from '../../ports/contracts/space-extension.contract.js';
 import { describeSpaceLogsContract } from '../../ports/contracts/space-logs.contract.js';
 import { describeSpaceNodesContract } from '../../ports/contracts/space-nodes.contract.js';
@@ -16,7 +19,9 @@ import { describeSpaceRepositoryContract } from '../../ports/contracts/space-rep
 import { describeSpaceTasksContract } from '../../ports/contracts/space-tasks.contract.js';
 import { describeSpaceWriteContract } from '../../ports/contracts/space-write.contract.js';
 import { describeStructuredStoreContract } from '../../ports/contracts/structured-store.contract.js';
+import { describeWorkspaceRepositoryContract } from '../../ports/contracts/workspace-repository.contract.js';
 
+import type { SqliteStructuredStore } from './structured-store.js';
 import type { NodeContent } from '../../../canvas/persistence-types.js';
 
 function note(nodeId: string, label: string, content: string): NodeContent {
@@ -32,12 +37,15 @@ async function createOrdinarySpace(
   if (!created.ok) throw new Error(`Could not create test Space ${canvasId}`);
 }
 
-describeStructuredStoreContract('SQLite', () => {
-  const file = createSqliteTestFile('huabu-sqlite-structured-contract-');
-  return {
-    store: new SqliteStructuredStore(file.filename),
-    cleanup: file.remove,
-  };
+describeStructuredStoreContract('SQLite', async () => {
+  // Through the same lifecycle a Server uses: open the connection, then select
+  // a Workspace. A handle resolved before one is active has no namespace to
+  // address, which is the SQL twin of the Disk adapter refusing before a
+  // workspace path is committed.
+  const harness = await openEmptySqliteTestStore(
+    'huabu-sqlite-structured-contract-',
+  );
+  return { store: harness.store, cleanup: harness.cleanup };
 });
 
 describeSpaceRepositoryContract('SQLite', async () => {
@@ -194,5 +202,31 @@ describeSpaceTasksContract('SQLite', async () => {
       return result.session;
     },
     cleanup: harness.cleanup,
+  };
+});
+
+describeBlobStoreContract('SqliteBlobStore', async () => {
+  const harness = await openEmptySqliteTestStore('huabu-sqlite-blob-contract-');
+  return {
+    // The blob store shares the structured store's connection, because both
+    // ports are one database file.
+    store: new SqliteBlobStore(harness.context),
+    canvasId: 'sqlite-blob-contract-space',
+    cleanup: harness.cleanup,
+  };
+});
+
+describeWorkspaceRepositoryContract('SQLite', async () => {
+  const file = createSqliteTestFile('huabu-sqlite-workspace-contract-');
+  const context = new SqliteStoreContext(file.filename);
+  context.init();
+  const repository = new SqliteWorkspaceRepository(context);
+  return {
+    repository,
+    create: (name: string) => repository.create(name),
+    cleanup: () => {
+      context.close();
+      file.remove();
+    },
   };
 });

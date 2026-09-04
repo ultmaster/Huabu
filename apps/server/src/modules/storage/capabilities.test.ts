@@ -27,16 +27,10 @@ const DISK: StorageProfile = {
   blobs: { kind: 'disk' },
 };
 
-/**
- * A profile naming a structured backend that has no adapter.
- *
- * The matrix has to answer for one before it exists — that is the point of
- * declaring rather than discovering — so this stands in for the first backend
- * that keeps Spaces in tables.
- */
+/** The profile that keeps Spaces in tables and bytes in rows. */
 const TABLES: StorageProfile = {
   structured: { kind: 'sqlite' },
-  blobs: { kind: 'disk' },
+  blobs: { kind: 'sqlite' },
 };
 
 describe('storage capability matrix', () => {
@@ -58,7 +52,7 @@ describe('storage capability matrix', () => {
     expect(describeUnavailableCapabilities(DISK)).toEqual([]);
   });
 
-  it('answers for a backend whose adapter is not selectable yet', () => {
+  it('answers for the backend that keeps Spaces in tables', () => {
     const missing = unavailableCapabilities(TABLES);
 
     // Every entry is Disk-only today, so a structured backend that is not
@@ -75,12 +69,13 @@ describe('storage capability matrix', () => {
     expect(hasStorageCapability(TABLES, 'something-portable')).toBe(true);
   });
 
-  it('reports capability gaps separately from profile selectability', () => {
-    // The matrix describes what SQLite lacks regardless of whether the
-    // preview can be selected. Validation rejects it at the separate
-    // production-readiness gate.
+  it('reports capability gaps without making them a misconfiguration', () => {
+    // The two gates are separate on purpose. A profile that offers fewer
+    // features is a stated limitation and must still start; only a profile
+    // that cannot serve at all is rejected. Conflating them would refuse a
+    // legitimate deployment.
     expect(describeUnavailableCapabilities(TABLES).length).toBeGreaterThan(0);
-    expect(() => validateStorageProfile(TABLES)).toThrow(/not selectable yet/);
+    expect(() => validateStorageProfile(TABLES)).not.toThrow();
     expect(() => validateStorageProfile(DISK)).not.toThrow();
   });
 

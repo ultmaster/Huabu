@@ -36,6 +36,7 @@ import type { Storage } from './storage.js';
  */
 export const PRODUCT_STORAGE_PROFILES: readonly StorageProfile[] = [
   { structured: { kind: 'disk' }, blobs: { kind: 'disk' } },
+  { structured: { kind: 'sqlite' }, blobs: { kind: 'sqlite' } },
 ];
 
 /** Readable name for a profile, for test titles. */
@@ -46,8 +47,24 @@ export function describeProfile(profile: StorageProfile): string {
 export interface MountedTestStorage {
   readonly profile: StorageProfile;
   readonly storage: Storage;
-  /** The temporary Workspace. Only the harness itself should name paths. */
+  /**
+   * The temporary directory this mount owns.
+   *
+   * For a Disk profile it is the Workspace itself; for a profile that keeps
+   * Workspaces in a database it is only where the harness put that database.
+   * Either way it is the harness's own business — a case that reads it has
+   * stopped being evidence of anything portable.
+   */
   readonly workspacePath: string;
+  /**
+   * Close the connections and open them again on the same durable state.
+   *
+   * What a restart actually is, for a suite that needs to prove something
+   * survives one. Returns the fresh {@link Storage}; the mount's own
+   * `storage` field still refers to the closed one, so a caller uses the
+   * value this returns.
+   */
+  reopen(): Promise<Storage>;
   close(): Promise<void>;
 }
 
@@ -67,11 +84,22 @@ export async function mountTestWorkspace(
   // A profile label reads as `disk/disk`, which is not a directory name.
   const safePrefix = prefix.replace(/[^a-zA-Z0-9._-]/g, '-');
   const workspacePath = mkdtempSync(path.join(tmpdir(), safePrefix));
-  // Prepares and commits the Workspace, exactly as a synchronous activation
-  // does. Workspace selection precedes storage here for the same reason it
-  // does at boot: the backend is process-wide and the Workspace is the
-  // namespace selected inside it.
-  setWorkspacePath(workspacePath);
+  const previousSqlitePath = process.env['HUABU_SQLITE_PATH'];
+
+  if (profile.structured.kind === 'disk') {
+    // Prepares and commits the Workspace, exactly as a synchronous activation
+    // does. Workspace selection precedes storage here for the same reason it
+    // does at boot: the backend is process-wide and the Workspace is the
+    // namespace selected inside it.
+    setWorkspacePath(workspacePath);
+  } else {
+    // Nothing to pick. The Workspace is a row the backend creates on first
+    // start, and `initStorage` activates it — which is exactly the behaviour
+    // that lets this profile run with no folder at all. The temp directory
+    // only gives this mount its own database file so parallel suites do not
+    // share one.
+    process.env['HUABU_SQLITE_PATH'] = path.join(workspacePath, 'huabu.sqlite');
+  }
 
   const storage = await initStorage(profile);
   // A namespace nobody has opened before has no World, and a Workspace
@@ -82,8 +110,20 @@ export async function mountTestWorkspace(
     profile,
     storage,
     workspacePath,
+    async reopen(): Promise<Storage> {
+      await closeStorage();
+      if (profile.structured.kind === 'disk') setWorkspacePath(workspacePath);
+      const reopened = await initStorage(profile);
+      await reopened.structured.spaces().ensureWorld();
+      return reopened;
+    },
     async close(): Promise<void> {
       await closeStorage();
+      if (previousSqlitePath === undefined) {
+        delete process.env['HUABU_SQLITE_PATH'];
+      } else {
+        process.env['HUABU_SQLITE_PATH'] = previousSqlitePath;
+      }
       rmSync(workspacePath, { recursive: true, force: true });
     },
   };

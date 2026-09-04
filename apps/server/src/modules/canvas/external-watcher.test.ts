@@ -72,6 +72,26 @@ const spaceHandle = vi.hoisted(() => ({
   read: vi.fn(async () => ({ state: { nodes: [] } })),
 }));
 
+/**
+ * The Space facade the watcher actually consults.
+ *
+ * `diskTree` is resolved per call from the same directory index the real one
+ * uses, so the "renamed outside the server" case still moves the watched path
+ * — and a Space with no directory is `null`, the way a non-Disk backend
+ * reports it.
+ */
+const spaceFacade = vi.hoisted(() => (canvasId: string) => ({
+  ...spaceHandle,
+  diskTree: (() => {
+    const entry = canvasDirs
+      .list()
+      .find((candidate) => candidate.id === canvasId);
+    return entry
+      ? { canvasId, directory: () => `/ws/${entry.filename}` }
+      : null;
+  })(),
+}));
+
 // The facade is stubbed for the Space handle, but the directory-handle
 // helpers must stay the real ones: these cases drive
 // `withSpaceDirHandlesReleased` and assert the watcher released its handles,
@@ -80,7 +100,7 @@ const spaceHandle = vi.hoisted(() => ({
 vi.mock('../storage/index.js', async () => {
   const handles = await import('../storage/backends/disk/space-dir-handles.js');
   return {
-    space: () => spaceHandle,
+    space: spaceFacade,
     registerSpaceDirHandleOwner: handles.registerSpaceDirHandleOwner,
     withSpaceDirHandlesReleased: handles.withSpaceDirHandlesReleased,
   };

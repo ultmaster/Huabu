@@ -28,9 +28,11 @@ import path from 'node:path';
 import { getDataDir } from '../../data-dir.js';
 import {
   acquireWorkspaceOperationLease,
-  getWorkspacePath,
+  commitWorkspaceIdentity,
+  getWorkspaceKey,
 } from '../workspace.js';
 import { DiskBlobStore } from './backends/disk/blob-store.js';
+import { getWorldCanvasId as diskWorldCanvasId } from './backends/disk/canvas-dirs.js';
 import { stageDiskSpaceImport } from './backends/disk/space-import.js';
 import { diskSpaceTree } from './backends/disk/space-tree.js';
 import { DiskStructuredStore } from './backends/disk/structured-store.js';
@@ -38,6 +40,10 @@ import {
   DiskWorkspaceRepository,
   workspaceRegistryPath,
 } from './backends/disk/workspace-repository.js';
+import { SqliteBlobStore } from './backends/sqlite/blob-store.js';
+import { SqliteStoreContext } from './backends/sqlite/database.js';
+import { SqliteStructuredStore } from './backends/sqlite/structured-store.js';
+import { SqliteWorkspaceRepository } from './backends/sqlite/workspace-repository.js';
 import { spaceBlobAreas } from './ports/blob.js';
 import {
   parseStorageProfile,
@@ -50,6 +56,7 @@ import { withSpacePutAdmission } from './space-lifecycle-admission.js';
 
 import type { DiskSpaceImport } from './backends/disk/space-import.js';
 import type { DiskSpaceTree } from './backends/disk/space-tree.js';
+import type { SqliteSpaceSubstrate } from './backends/sqlite/space-extension.js';
 import type {
   BlobInfo,
   BlobLease,
@@ -83,17 +90,38 @@ export type SpaceDeleteOutcome =
   | SpaceDeleteFinishResult
   | { readonly ok: false; readonly reason: 'world-forbidden' };
 
-function activeWorkspacePath(): string {
-  return path.resolve(getWorkspacePath());
+/**
+ * The active Workspace as an identity to compare, not a location.
+ *
+ * The blob put saga has to prove that the Workspace has not changed under an
+ * awaited operation. On Disk that comparison was the resolved path; a
+ * Workspace that is a row has no path, so the key is what both backends can
+ * answer with.
+ */
+function activeWorkspaceKey(): string {
+  return getWorkspaceKey();
 }
 
-function assertActiveWorkspace(workspacePath: string, canvasId: string): void {
-  if (activeWorkspacePath() !== workspacePath) {
+function assertActiveWorkspace(workspaceKey: string, canvasId: string): void {
+  if (activeWorkspaceKey() !== workspaceKey) {
     throw new Error(
       `Blob scope for Space "${canvasId}" belongs to an inactive workspace. ` +
         `Resolve a fresh scope after workspace activation.`,
     );
   }
+}
+
+/**
+ * Where the SQLite profile keeps everything it has.
+ *
+ * One file, beside the Disk backend's own registry in the data directory, so
+ * an operator can find both in the same place. `HUABU_SQLITE_PATH` overrides
+ * it for deployments that keep their database elsewhere.
+ */
+export function sqliteDatabasePath(dataDir: string = getDataDir()): string {
+  const configured = process.env['HUABU_SQLITE_PATH']?.trim();
+  if (configured) return configured;
+  return path.join(dataDir, 'storage', 'sqlite', 'huabu.sqlite');
 }
 
 /**
@@ -156,6 +184,29 @@ export interface Space extends SpaceHandle, SpaceBlobs {
    * this module's internal topology.
    */
   readonly diskTree: DiskSpaceTree | null;
+  /**
+   * SQLite's connection point for an extension namespace, without awaiting.
+   * `null` on every other backend.
+   *
+   * The same shape as {@link diskTree} and there for the same reason: a
+   * capability one backend has, named for it and typed by its absence. What
+   * makes it worth its own member rather than the port's `extension()` is
+   * that it is *synchronous*. An owner whose own interface is synchronous —
+   * the Agenetes conversation stores — can resolve its place at the moment it
+   * needs it instead of keeping a cache primed from somewhere else.
+   */
+  readonly sqliteTree: SqliteSpaceTree | null;
+}
+
+/** What a namespace can ask of the SQLite backend for one Space. */
+export interface SqliteSpaceTree {
+  /**
+   * This namespace's connection point, created on demand.
+   *
+   * `null` when the Space does not exist — the same refusal the port's
+   * `extension()` makes, and for the same reason.
+   */
+  extension(namespace: string): SqliteSpaceSubstrate | null;
 }
 
 function composeSpace(storage: Storage, canvasId: string): Space {
@@ -180,6 +231,16 @@ function composeSpace(storage: Storage, canvasId: string): Space {
       storage.profile.structured.kind === 'disk'
         ? diskSpaceTree(canvasId)
         : null,
+    sqliteTree:
+      storage.structured instanceof SqliteStructuredStore
+        ? {
+            extension: (namespace: string) =>
+              (storage.structured as SqliteStructuredStore).extensionSync(
+                canvasId,
+                namespace,
+              ),
+          }
+        : null,
   };
 }
 
@@ -187,6 +248,8 @@ function buildBlobStore(profile: StorageProfile): BlobStore {
   switch (profile.blobs.kind) {
     case 'disk':
       return new DiskBlobStore();
+    case 'sqlite':
+      return new SqliteBlobStore(sqliteConnection());
     default:
       // Unreachable: validateStorageProfile rejects unimplemented kinds.
       throw new Error(`Unsupported blob backend: ${profile.blobs.kind}`);
@@ -197,6 +260,8 @@ function buildStructuredStore(profile: StorageProfile): StructuredStore {
   switch (profile.structured.kind) {
     case 'disk':
       return new DiskStructuredStore();
+    case 'sqlite':
+      return new SqliteStructuredStore(sqliteConnection());
     default:
       throw new Error(
         `Unsupported structured backend: ${profile.structured.kind}`,
@@ -245,8 +310,26 @@ export function createStorage(profile: StorageProfile): Storage {
 // ─── Process-wide holder ────────────────────────────────────────────────────
 
 let current: Storage | null = null;
-let workspaces: DiskWorkspaceRepository | null = null;
+let workspaces: WorkspaceRepository | null = null;
+let sqlite: SqliteStoreContext | null = null;
+let activeWorldCanvasId: string | null = null;
 let spaceCreateTail: Promise<void> = Promise.resolve();
+
+/**
+ * The one SQLite connection this process holds, opened on first need.
+ *
+ * Opening it is synchronous, which is why the on-demand path stays legal for
+ * this profile: there is no `await` to skip. Both storage axes and the
+ * Workspace repository borrow it, because they are one database file and a
+ * second connection would be a second writer.
+ */
+function sqliteConnection(): SqliteStoreContext {
+  if (sqlite) return sqlite;
+  const context = new SqliteStoreContext(sqliteDatabasePath());
+  context.init();
+  sqlite = context;
+  return context;
+}
 
 /**
  * The Workspace repository for the configured structured backend.
@@ -267,12 +350,49 @@ let spaceCreateTail: Promise<void> = Promise.resolve();
  * wired during awaited startup rather than through the on-demand path.
  */
 export function getWorkspaceRepository(): WorkspaceRepository {
-  return materializedWorkspaces();
+  if (workspaces) return workspaces;
+  const profile = activeProfile();
+  workspaces =
+    profile.structured.kind === 'sqlite'
+      ? new SqliteWorkspaceRepository(sqliteConnection())
+      : new DiskWorkspaceRepository(workspaceRegistryPath(getDataDir()));
+  return workspaces;
 }
 
-/** Whether the Disk Workspace membership registry already exists on disk. */
+/**
+ * Whether the Disk Workspace membership registry already exists on disk.
+ *
+ * `false` off Disk, where there is no such registry to import into: the one
+ * caller is the deprecated desktop-store import, which is a Disk migration.
+ */
 export function hasWorkspaceRegistry(): boolean {
+  if (!materializesWorkspaces()) return false;
   return materializedWorkspaces().hasDurableRegistry();
+}
+
+/**
+ * Whether the configured backend gives a Workspace a real directory.
+ *
+ * The one question the rest of the Server should ask before reaching for a
+ * Workspace path: everything that follows from "no" — no folder picker, no
+ * bundle import, no user skills directory — is a stated capability rather
+ * than a runtime surprise.
+ */
+export function materializesWorkspaces(): boolean {
+  return activeProfile().structured.kind === 'disk';
+}
+
+/**
+ * The profile in force, preferring the one storage was actually opened with.
+ *
+ * The environment answers before startup — managed mode adopts its Workspace
+ * while `app.ts` is still evaluating — but once `initStorage` has run, the
+ * profile it was handed is the truth. A test that mounts an explicit profile
+ * would otherwise get a Workspace repository for whatever the environment
+ * happened to say.
+ */
+function activeProfile(): StorageProfile {
+  return current?.profile ?? parseStorageProfile();
 }
 
 /**
@@ -287,18 +407,17 @@ export function hasWorkspaceRegistry(): boolean {
  * refuses outright rather than handing back a path that does not exist.
  */
 function materializedWorkspaces(): DiskWorkspaceRepository {
-  if (workspaces) return workspaces;
-
-  const profile = parseStorageProfile();
-  if (profile.structured.kind !== 'disk') {
+  const repository = getWorkspaceRepository();
+  if (!(repository instanceof DiskWorkspaceRepository)) {
+    const profile = parseStorageProfile();
     throw new StorageProfileError(
       `The "${profile.structured.kind}" structured backend does not materialize ` +
-        `Workspaces as directories. Implement a locator for it before using ` +
-        `directory-shaped Workspace activation.`,
+        `Workspaces as directories, so there is no folder to adopt, reveal, or ` +
+        `resolve. Select the disk structured backend for directory-shaped ` +
+        `Workspace activation.`,
     );
   }
-  workspaces = new DiskWorkspaceRepository(workspaceRegistryPath(getDataDir()));
-  return workspaces;
+  return repository;
 }
 
 /**
@@ -318,8 +437,16 @@ export function workspaceAtDirectory(
   return materializedWorkspaces().at(workspacePath);
 }
 
-/** The directory backing a registered Workspace, or null if it is not one. */
+/**
+ * The directory backing a registered Workspace, or `null` if there is none.
+ *
+ * `null` covers both "not a registered Workspace" and "this backend does not
+ * put Workspaces in folders". Callers already handle the first, and treating
+ * the second the same way is what lets a listing render on either backend
+ * instead of failing whole.
+ */
 export function workspaceDirectory(workspaceId: string): string | null {
+  if (!materializesWorkspaces()) return null;
   return materializedWorkspaces().directoryOf(workspaceId);
 }
 
@@ -372,10 +499,88 @@ function ensure(): Storage {
 export async function initStorage(
   profile: StorageProfile = parseStorageProfile(),
 ): Promise<Storage> {
+  // Rebuild the Workspace repository against this profile: a repository
+  // memoized from the environment before an explicit profile was chosen would
+  // answer for the wrong backend.
+  workspaces = null;
   const storage = createStorage(profile);
   await Promise.all([storage.structured.init(), storage.blobs.init()]);
   current = storage;
+  await ensureActiveWorkspace(profile);
   return storage;
+}
+
+/**
+ * Make sure a Workspace is active, for a backend that can decide by itself.
+ *
+ * On Disk the Workspace is a folder the user chooses, so the Server waits.
+ * Where a Workspace is a row there is nothing to choose and nothing to ask
+ * for: the first start creates one and activates it, and the app is usable
+ * without a setup step. A Workspace already activated — by managed mode, or
+ * by a previous call — is left alone.
+ */
+async function ensureActiveWorkspace(profile: StorageProfile): Promise<void> {
+  if (profile.structured.kind !== 'sqlite') return;
+  const repository = getWorkspaceRepository();
+  if (!(repository instanceof SqliteWorkspaceRepository)) return;
+  // The question is whether *this connection* is pointed at a Workspace, not
+  // whether the process remembers one. A handle left over from a previous
+  // profile is a name without a namespace behind it.
+  if (sqliteConnection().activeWorkspaceId() !== null) return;
+  const workspace = await repository.ensureDefault(DEFAULT_WORKSPACE_NAME);
+  await activateWorkspace(workspace);
+}
+
+/** The name a SQL deployment's first Workspace is given. */
+const DEFAULT_WORKSPACE_NAME = 'Workspace';
+
+/**
+ * Select one Workspace as the process's active namespace.
+ *
+ * Two things have to agree: the Server's own active-Workspace state and the
+ * namespace the backend scopes its queries to. Doing both here keeps them
+ * from drifting — a connection still pointed at the previous Workspace would
+ * answer confidently with the wrong Spaces.
+ */
+export async function activateWorkspace(
+  workspace: WorkspaceHandle,
+): Promise<void> {
+  if (sqlite) sqlite.useWorkspace(workspace.workspaceId);
+  activeWorldCanvasId = null;
+  commitWorkspaceIdentity(workspace);
+  if (workspaces instanceof SqliteWorkspaceRepository) {
+    workspaces.markOpened(workspace.workspaceId);
+  }
+  // A Workspace with no World has no Portal target and no home view. On Disk
+  // the World is written by workspace preparation; here the same step belongs
+  // to activation, because activation is the whole of "open a Workspace".
+  activeWorldCanvasId = await ensure().structured.spaces().ensureWorld();
+}
+
+/**
+ * The hidden World Space of the active Workspace, or `null` before one is
+ * opened.
+ *
+ * Disk answers from its directory index, which re-scans, so a Workspace edited
+ * from outside the app stays correct. Elsewhere the id is remembered from
+ * activation: it is minted once per Workspace and never changes, and reading
+ * it is synchronous in call sites that cannot await.
+ */
+export function getWorldCanvasId(): string | null {
+  return materializesWorkspaces() ? diskWorldCanvasId() : activeWorldCanvasId;
+}
+
+export function requireWorldCanvasId(): string {
+  const canvasId = getWorldCanvasId();
+  if (!canvasId) {
+    throw new Error('Configured workspace has no World canvas');
+  }
+  return canvasId;
+}
+
+export function isWorldCanvasId(canvasId: string): boolean {
+  const world = getWorldCanvasId();
+  return world !== null && world === canvasId;
 }
 
 export function getStorage(): Storage {
@@ -396,10 +601,17 @@ export function getStorage(): Storage {
  */
 export async function closeStorage(): Promise<void> {
   const storage = current;
+  const connection = sqlite;
   current = null;
   workspaces = null;
-  if (!storage) return;
-  await Promise.all([storage.structured.close(), storage.blobs.close()]);
+  sqlite = null;
+  activeWorldCanvasId = null;
+  if (storage) {
+    await Promise.all([storage.structured.close(), storage.blobs.close()]);
+  }
+  // The shared connection outlives either store, so closing it is this
+  // module's job rather than whichever adapter happens to hold it.
+  connection?.close();
 }
 
 export function getBlobStore(): BlobStore {
@@ -495,7 +707,7 @@ function guardedBlobScope(
   canvasId: string,
   delegate: BlobScope,
 ): BlobScope {
-  const workspacePath = activeWorkspacePath();
+  const workspaceKey = activeWorkspaceKey();
 
   async function requireSpace(): Promise<void> {
     const record = await storage.structured.space(canvasId).read();
@@ -507,16 +719,12 @@ function guardedBlobScope(
   return {
     async put(name: string, body: Readable | Buffer): Promise<BlobInfo> {
       try {
-        return await withSpacePutAdmission(
-          workspacePath,
-          canvasId,
-          async () => {
-            assertActiveWorkspace(workspacePath, canvasId);
-            await requireSpace();
-            assertActiveWorkspace(workspacePath, canvasId);
-            return delegate.put(name, body);
-          },
-        );
+        return await withSpacePutAdmission(workspaceKey, canvasId, async () => {
+          assertActiveWorkspace(workspaceKey, canvasId);
+          await requireSpace();
+          assertActiveWorkspace(workspaceKey, canvasId);
+          return delegate.put(name, body);
+        });
       } catch (error) {
         drainRejectedBody(body);
         throw error;

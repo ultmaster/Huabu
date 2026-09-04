@@ -82,8 +82,19 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
     backends: ['disk'],
     rationale:
       'They sandbox on the Space directory. Off Disk the first-party agent ' +
-      'reaches a Space over RFS/HTTP, which is what external agents already ' +
-      'use.',
+      'reads and writes nodes through the Canvas tools instead, which is ' +
+      'the portable surface it already prefers for structured edits.',
+  },
+  {
+    id: 'space-file-plane',
+    summary: 'Reach a Space as files over RFS, the plane external agents mount',
+    backends: ['disk'],
+    rationale:
+      'RFS projects the Space directory over HTTP — the same tree, reachable ' +
+      'from another machine. It is listed apart from the built-in file tools ' +
+      'because it is what those tools were said to fall back to: a Space ' +
+      'with no file plane has neither, and an external agent bound to a ' +
+      'Space on this backend reaches it through the Canvas API.',
   },
   {
     id: 'external-note-discovery',
@@ -94,6 +105,34 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
       'application. A database backend has no such arrival path unless ' +
       'someone writes to the store out of band, and inventing one would buy ' +
       'nothing.',
+  },
+  {
+    id: 'workspace-directory',
+    summary: 'Choose, create, or reveal a Workspace folder on this machine',
+    backends: ['disk'],
+    rationale:
+      'A Workspace is a folder the user picks. Where Workspaces are rows, ' +
+      'there is nothing to browse to: the Server opens its own on first ' +
+      'start and Workspaces are managed by name instead of by path.',
+  },
+  {
+    id: 'workspace-user-memory',
+    summary: 'The cross-Space user memory document (setting/user.md)',
+    backends: ['disk'],
+    rationale:
+      'A user-editable file at the Workspace root, deliberately outside any ' +
+      'Space so it applies to all of them. Every blob scope this port has is ' +
+      "scoped to a Space, so there is nowhere it belongs yet; a Space's own " +
+      'memory body is unaffected.',
+  },
+  {
+    id: 'workspace-user-skills',
+    summary: 'User-authored skills under the Workspace setting/skills folder',
+    backends: ['disk'],
+    rationale:
+      'Skills are read as files a user can edit and drop in by hand, which ' +
+      'is the same arrival path external notes rely on. Bundled and Agent ' +
+      'Team skills are unaffected.',
   },
   {
     id: 'space-directory-handle-coordination',

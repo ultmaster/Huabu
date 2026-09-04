@@ -9,6 +9,17 @@
  * value looks like. Space and log reads reject malformed domain values. Node
  * reads preserve the port's repair path by recovering malformed JSON values
  * into a valid record whose content still exposes the stored value.
+ *
+ * The encoder's job is to refuse what SQLite could not faithfully return —
+ * cycles, non-finite numbers, values `JSON.stringify` would silently reshape
+ * into something else. It deliberately does **not** refuse what
+ * `JSON.stringify` already handles by rule, because Disk persists through
+ * that same function: a record it accepts must not become a rejected write
+ * here. `undefined` is the case that matters in practice — an optional field
+ * spread onto a node makes an own property whose value is `undefined`, and
+ * Disk drops it. See §13's "silent divergence" risk: a portable contract that
+ * only holds where the adapters already agree certifies both sides of a
+ * disagreement.
  */
 
 import { SQLITE_WORLD_COLLISION_KEY } from './database.js';
@@ -41,6 +52,10 @@ function assertJsonValue(
     }
     return;
   }
+  // `JSON.stringify` drops an `undefined` object property and encodes an
+  // `undefined` array element as null, so Disk already accepts both. Matching
+  // that rule keeps one record from being writable on one backend only.
+  if (value === undefined) return;
   if (typeof value !== 'object') {
     throw new TypeError(`${context} contains a non-JSON value`);
   }
@@ -137,6 +152,7 @@ function numberColumn(
 
 export interface PersistedSpace {
   readonly record: CanvasFile;
+  readonly workspaceId: string;
   readonly collisionKey: string;
   readonly isWorld: boolean;
 }
@@ -164,22 +180,66 @@ export function decodeSpaceRow(value: unknown): PersistedSpace {
   }
   return {
     record,
+    workspaceId: stringColumn(row, 'workspace_id', context),
     collisionKey: stringColumn(row, 'collision_key', context),
     isWorld: world === 1,
   };
 }
 
 export const SPACE_COLUMNS =
-  'canvas_id, title, collision_key, version, state_json, created_at, updated_at, is_world';
+  'canvas_id, workspace_id, title, collision_key, version, state_json, ' +
+  'created_at, updated_at, is_world';
 
+/**
+ * Read one Space, scoped to the Workspace that owns it.
+ *
+ * The Workspace predicate is not an optimization. `canvas_id` is unique across
+ * the whole database, so without it a handle resolved in one Workspace would
+ * answer for a Space in another — which is exactly the confusion the Disk
+ * adapters prevent by binding to a workspace path.
+ */
 export function readSpaceRow(
   database: DatabaseSync,
+  workspaceId: string,
   canvasId: string,
 ): PersistedSpace | null {
   const row = database
-    .prepare(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE canvas_id = ?`)
-    .get(canvasId);
+    .prepare(
+      `SELECT ${SPACE_COLUMNS}
+       FROM spaces
+       WHERE workspace_id = ? AND canvas_id = ?`,
+    )
+    .get(workspaceId, canvasId);
   return row === undefined ? null : decodeSpaceRow(row);
+}
+
+/** Whether the named Space exists in this Workspace. */
+export function spaceRowExists(
+  database: DatabaseSync,
+  workspaceId: string,
+  canvasId: string,
+): boolean {
+  return (
+    database
+      .prepare(
+        `SELECT 1 AS present
+         FROM spaces
+         WHERE workspace_id = ? AND canvas_id = ?`,
+      )
+      .get(workspaceId, canvasId)?.['present'] === 1
+  );
+}
+
+/** Collision keys already taken in one Workspace, for name allocation. */
+export function occupiedCollisionKeys(
+  database: DatabaseSync,
+  workspaceId: string,
+): string[] {
+  return database
+    .prepare('SELECT collision_key FROM spaces WHERE workspace_id = ?')
+    .all(workspaceId)
+    .map((row) => row['collision_key'])
+    .filter((value): value is string => typeof value === 'string');
 }
 
 export function validateCanvasFile(record: CanvasFile, canvasId: string): void {
@@ -192,6 +252,7 @@ export function validateCanvasFile(record: CanvasFile, canvasId: string): void {
 
 export function insertSpaceRow(
   database: DatabaseSync,
+  workspaceId: string,
   record: CanvasFile,
   collisionKey: string,
   isWorld = false,
@@ -200,12 +261,13 @@ export function insertSpaceRow(
   database
     .prepare(
       `INSERT INTO spaces (
-        canvas_id, title, collision_key, version, state_json,
+        canvas_id, workspace_id, title, collision_key, version, state_json,
         created_at, updated_at, is_world
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       record.canvasId,
+      workspaceId,
       record.title,
       isWorld ? SQLITE_WORLD_COLLISION_KEY : collisionKey,
       record.version,
@@ -218,6 +280,7 @@ export function insertSpaceRow(
 
 export function updateSpaceRow(
   database: DatabaseSync,
+  workspaceId: string,
   record: CanvasFile,
   expectedVersion: number,
 ): number {
@@ -226,12 +289,13 @@ export function updateSpaceRow(
     .prepare(
       `UPDATE spaces
        SET version = ?, state_json = ?, updated_at = ?
-       WHERE canvas_id = ? AND version = ?`,
+       WHERE workspace_id = ? AND canvas_id = ? AND version = ?`,
     )
     .run(
       record.version,
       stringifyJson(record.state, `Space ${record.canvasId} state`),
       record.updatedAt,
+      workspaceId,
       record.canvasId,
       expectedVersion,
     );

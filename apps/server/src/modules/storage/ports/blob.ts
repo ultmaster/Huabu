@@ -22,7 +22,14 @@
 import type { StorageHealth } from './common.js';
 import type { Readable } from 'node:stream';
 
-export type BlobBackendKind = 'disk' | 'azure';
+/**
+ * Backends with a blob adapter today.
+ *
+ * Like {@link StructuredBackendKind}, this names only what exists. The wider
+ * vocabulary a profile may *request* — including `azure`, which is a settled
+ * direction with no adapter — belongs to `profile.ts`.
+ */
+export type BlobBackendKind = 'disk' | 'sqlite';
 
 /**
  * Every area of one Space that holds bytes.

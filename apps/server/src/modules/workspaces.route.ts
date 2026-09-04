@@ -10,11 +10,14 @@ import { workspaceCreateSchema, workspaceRenameSchema } from '@huabu/shared';
 import { migrateLegacyDesktopWorkspaceStore } from './legacy-desktop-workspace-store.js';
 import { resetPreprocessDispatcher } from './preprocessing/index.js';
 import {
+  activateWorkspace,
   adoptWorkspaceDirectory,
   ensureWorkspaceManifestOnDisk,
   getWorkspaceRepository,
   hasWorkspaceRegistry,
+  materializesWorkspaces,
   resetStorageCache,
+  unavailableCapabilityMessage,
   workspaceAtDirectory,
   workspaceDirectory,
   workspaceIdentityOnDisk,
@@ -27,6 +30,7 @@ import {
 } from './workspace-activation.js';
 import {
   commitWorkspacePath,
+  getWorkspaceDirectory,
   getWorkspaceHandle,
   getWorkspacePath,
   isManagedMode,
@@ -84,10 +88,16 @@ function rejectReadOnlyMutation(
 function descriptor(workspace: WorkspaceHandle): WorkspaceDescriptor {
   const workspacePath = workspaceDirectory(workspace.workspaceId);
   const activeHandle = getWorkspaceHandle();
+  const activeDirectory = getWorkspaceDirectory();
+  // Identity decides which Workspace is active. On Disk the location has to
+  // agree as well, because a registered id can be pointed at a folder the
+  // process is not the one serving; where there is no folder, there is
+  // nothing else to agree.
   const active =
     activeHandle?.workspaceId === workspace.workspaceId &&
-    workspacePath !== null &&
-    path.resolve(getWorkspacePath()) === path.resolve(workspacePath);
+    (workspacePath === null || activeDirectory === null
+      ? !materializesWorkspaces()
+      : path.resolve(activeDirectory) === path.resolve(workspacePath));
   return {
     workspaceId: workspace.workspaceId,
     name: workspace.name,
@@ -186,7 +196,14 @@ const workspacesRoutes: FastifyPluginAsync = async (app) => {
    * behind a preparation fork each.
    */
   function importLegacyDesktopStore(): void {
-    if (legacyDesktopStoreImported || isManagedMode() || hasWorkspaceRegistry())
+    if (
+      legacyDesktopStoreImported ||
+      isManagedMode() ||
+      // The deprecated store remembers folders, so there is nothing to import
+      // where a Workspace is not one.
+      !materializesWorkspaces() ||
+      hasWorkspaceRegistry()
+    )
       return;
     const filePath = process.env.HUABU_LEGACY_WORKSPACE_STORE?.trim();
     if (!filePath) return;
@@ -209,6 +226,17 @@ const workspacesRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Body: WorkspaceCreateRequest }>('/', async (request, reply) => {
     const rejected = rejectReadOnlyMutation(request, reply);
     if (rejected) return rejected;
+    if (!materializesWorkspaces()) {
+      // Creating a Workspace here means adopting a folder. Where Workspaces
+      // are rows the Server opens its own, and adding more of them is a
+      // by-name operation this API does not have yet.
+      return sendError(
+        reply,
+        409,
+        unavailableCapabilityMessage('workspace-directory'),
+        'STORAGE_CAPABILITY_UNAVAILABLE',
+      );
+    }
 
     const parsed = workspaceCreateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -284,10 +312,23 @@ const workspacesRoutes: FastifyPluginAsync = async (app) => {
       if (typeof parsedId !== 'string') return parsedId;
 
       const workspace = await getWorkspaceRepository().get(parsedId);
-      const workspacePath = workspaceDirectory(parsedId);
-      if (!workspace || !workspacePath) {
-        return sendError(reply, 404, 'Workspace not found');
+      if (!workspace) return sendError(reply, 404, 'Workspace not found');
+
+      // A Workspace that is a row needs no preparation: activation is
+      // re-scoping the connection, which is why this profile can switch
+      // Workspaces without a folder to prepare or a child process to fork.
+      if (!materializesWorkspaces()) {
+        try {
+          await activateWorkspace(workspace);
+          resetPreprocessDispatcher();
+          return reply.send(descriptor(getWorkspaceHandle() ?? workspace));
+        } catch (error) {
+          return sendPreparationError(reply, error);
+        }
       }
+
+      const workspacePath = workspaceDirectory(parsedId);
+      if (!workspacePath) return sendError(reply, 404, 'Workspace not found');
       try {
         await activateWorkspacePath(workspacePath);
         resetStorageCache();

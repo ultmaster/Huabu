@@ -44,6 +44,7 @@ const testState = vi.hoisted(() => ({
 
 const storageMocks = vi.hoisted(() => ({
   resetStorageCache: vi.fn(),
+  activateWorkspace: vi.fn(async () => {}),
 }));
 
 const activationMocks = vi.hoisted(() => ({
@@ -141,9 +142,15 @@ const locatorMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./storage/index.js', () => ({
+  activateWorkspace: storageMocks.activateWorkspace,
   getWorkspaceRepository: () => repository,
   hasWorkspaceRegistry: () => testState.registryInitialized,
+  // These routes are the directory-shaped Workspace API, so the profile under
+  // test is the one that has directories. The non-materializing branches are
+  // covered where they are the point.
+  materializesWorkspaces: () => true,
   resetStorageCache: storageMocks.resetStorageCache,
+  unavailableCapabilityMessage: (id: string) => `capability ${id}`,
   adoptWorkspaceDirectory: locatorMocks.adoptWorkspaceDirectory,
   ensureWorkspaceManifestOnDisk: locatorMocks.ensureWorkspaceManifestOnDisk,
   workspaceAtDirectory: locatorMocks.workspaceAtDirectory,
@@ -156,6 +163,7 @@ vi.mock('./workspace.js', () => ({
     testState.active = locatorMocks.adoptWorkspaceDirectory(workspacePath);
     testState.activePath = workspacePath;
   },
+  getWorkspaceDirectory: () => testState.activePath,
   getWorkspaceHandle: () => testState.active,
   getWorkspacePath: () => {
     if (!testState.activePath) throw new Error('No active Workspace path');

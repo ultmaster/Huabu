@@ -10,8 +10,6 @@
  * deployment, so profiles are validated before any connection is opened.
  */
 
-import type { BlobBackendKind } from './ports/blob.js';
-
 /**
  * Structured backend families a profile may name.
  *
@@ -23,9 +21,17 @@ import type { BlobBackendKind } from './ports/blob.js';
  */
 export type RequestedStructuredKind = 'disk' | 'sqlite' | 'postgres';
 
+/**
+ * Blob backend families a profile may name.
+ *
+ * Wider than the port's {@link BlobBackendKind} for the same reason
+ * {@link RequestedStructuredKind} is wider than the structured one.
+ */
+export type RequestedBlobKind = 'disk' | 'sqlite' | 'azure';
+
 export interface StorageProfile {
   structured: { kind: RequestedStructuredKind };
-  blobs: { kind: BlobBackendKind };
+  blobs: { kind: RequestedBlobKind };
 }
 
 /** Backends with an adapter implementation, selectable or otherwise. */
@@ -35,21 +41,26 @@ const AVAILABLE_STRUCTURED: readonly RequestedStructuredKind[] = [
 ];
 
 /**
- * Backends whose complete capability matrix is safe for production use.
+ * Backends whose capability matrix is complete enough to select.
  *
- * SQLite deliberately stays out while product composition, Blob placement,
- * Disk-only capabilities, and Workspace remounting still have one authority
- * only in the Disk profile.
+ * "Complete enough" is not "identical to Disk". A selectable profile may offer
+ * fewer features, as long as every one it does not offer is declared in
+ * `capabilities.ts` and refused where a user would reach for it. What
+ * disqualifies a backend is an *undeclared* gap — a feature that would fail
+ * with a stack trace rather than a sentence.
  */
-const SELECTABLE_STRUCTURED: readonly RequestedStructuredKind[] = ['disk'];
-const IMPLEMENTED_BLOBS: readonly BlobBackendKind[] = ['disk'];
+const SELECTABLE_STRUCTURED: readonly RequestedStructuredKind[] = [
+  'disk',
+  'sqlite',
+];
+const AVAILABLE_BLOBS: readonly RequestedBlobKind[] = ['disk', 'sqlite'];
 
 const STRUCTURED_KINDS: readonly RequestedStructuredKind[] = [
   'disk',
   'sqlite',
   'postgres',
 ];
-const BLOB_KINDS: readonly string[] = ['disk', 'azure'];
+const BLOB_KINDS: readonly RequestedBlobKind[] = ['disk', 'sqlite', 'azure'];
 
 export class StorageProfileError extends Error {
   override name = 'StorageProfileError';
@@ -86,7 +97,7 @@ export function parseStorageProfile(
         'HUABU_BLOB_BACKEND',
         env['HUABU_BLOB_BACKEND'],
         BLOB_KINDS,
-      ) as BlobBackendKind,
+      ) as RequestedBlobKind,
     },
   };
 }
@@ -121,10 +132,21 @@ export function validateStorageProfile(profile: StorageProfile): void {
         `depend on Disk. Selectable: ${SELECTABLE_STRUCTURED.join(', ')}.`,
     );
   }
-  if (!IMPLEMENTED_BLOBS.includes(profile.blobs.kind)) {
+  if (!AVAILABLE_BLOBS.includes(profile.blobs.kind)) {
     throw new StorageProfileError(
       `Blob backend "${profile.blobs.kind}" is not implemented yet. ` +
-        `Available: ${IMPLEMENTED_BLOBS.join(', ')}.`,
+        `Available: ${AVAILABLE_BLOBS.join(', ')}.`,
+    );
+  }
+  // The first real cross-axis rule. SQLite blobs are rows in the structured
+  // database, so they have nowhere to live unless that database exists — the
+  // two axes stay independent in the port design, but this particular pairing
+  // is a single file, and saying so here beats failing at the first upload.
+  if (profile.blobs.kind === 'sqlite' && profile.structured.kind !== 'sqlite') {
+    throw new StorageProfileError(
+      `Blob backend "sqlite" stores bytes in the SQLite structured database, ` +
+        `so it requires HUABU_STRUCTURED_BACKEND=sqlite (got ` +
+        `"${profile.structured.kind}").`,
     );
   }
 }
@@ -140,7 +162,7 @@ export function validateStorageProfile(profile: StorageProfile): void {
  * means adding an adapter forces a decision about it.
  */
 const LAZY_SAFE_STRUCTURED: readonly RequestedStructuredKind[] = ['disk'];
-const LAZY_SAFE_BLOBS: readonly BlobBackendKind[] = ['disk'];
+const LAZY_SAFE_BLOBS: readonly RequestedBlobKind[] = ['disk'];
 
 /** Whether this profile may only be built through an awaited `initStorage()`. */
 export function requiresExplicitInit(profile: StorageProfile): boolean {

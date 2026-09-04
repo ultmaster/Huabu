@@ -5,6 +5,7 @@ import { withImmediateTransaction } from './database.js';
 import { allocateSpaceIdentity } from './identity.js';
 import {
   insertSpaceRow,
+  occupiedCollisionKeys,
   readSpaceRow,
   stringifyJson,
   updateSpaceRow,
@@ -86,17 +87,22 @@ function validateInput(canvasId: string, input: SpaceWriteInput): void {
 /** Bind the atomic SQLite record/node/delta write to one Space. */
 export function createSqliteSpaceWrite(
   context: SqliteStoreContext,
+  boundWorkspaceId: string,
   canvasId: string,
 ): SpaceHandle['write'] {
   return async function write(
     input: SpaceWriteInput,
   ): Promise<SpaceWriteResult> {
+    const workspaceId = context.assertBoundWorkspace(
+      boundWorkspaceId,
+      `SpaceWrite(${canvasId})`,
+    );
     context.assertMutationAllowed(canvasId);
     validateInput(canvasId, input);
     const database = context.database();
 
     const completed = withImmediateTransaction(database, () => {
-      const current = readSpaceRow(database, canvasId);
+      const current = readSpaceRow(database, workspaceId, canvasId);
       if (current === null) {
         if (!input.allowCreate) {
           return { ok: false, reason: 'not-found' } as const;
@@ -106,18 +112,14 @@ export function createSqliteSpaceWrite(
             `SpaceWrite(${canvasId}) can create only from version 0`,
           );
         }
-        const occupied = database
-          .prepare('SELECT collision_key FROM spaces')
-          .all()
-          .map((row) => row['collision_key'])
-          .filter((value): value is string => typeof value === 'string');
         const identity = allocateSpaceIdentity(
           input.nextRecord.title,
           canvasId,
-          occupied,
+          occupiedCollisionKeys(database, workspaceId),
         );
         insertSpaceRow(
           database,
+          workspaceId,
           { ...input.nextRecord, title: identity.title },
           identity.collisionKey,
         );
@@ -149,16 +151,26 @@ export function createSqliteSpaceWrite(
           continue;
         }
 
-        const result = putSqliteNodeInTransaction(database, canvasId, {
-          nodeId: mutation.nodeId,
-          record: mutation.record,
-          strictLabel: mutation.strictLabel,
-        });
+        const result = putSqliteNodeInTransaction(
+          database,
+          workspaceId,
+          canvasId,
+          {
+            nodeId: mutation.nodeId,
+            record: mutation.record,
+            strictLabel: mutation.strictLabel,
+          },
+        );
         if (!result.ok) throw mutationError(mutation, result);
       }
 
       if (
-        updateSpaceRow(database, input.nextRecord, input.expectedVersion) !== 1
+        updateSpaceRow(
+          database,
+          workspaceId,
+          input.nextRecord,
+          input.expectedVersion,
+        ) !== 1
       ) {
         throw new Error(`SpaceWrite(${canvasId}) lost its version race`);
       }

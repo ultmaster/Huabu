@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { SQLITE_SCHEMA_VERSION } from './database.js';
+import { SqliteStoreContext, SQLITE_SCHEMA_VERSION } from './database.js';
 import { collisionKeyForTitle } from './identity.js';
 import { insertSpaceRow, parseJson } from './rows.js';
 import { SqliteStructuredStore } from './structured-store.js';
+import { SqliteWorkspaceRepository } from './workspace-repository.js';
 
 import type {
   CanvasFile,
@@ -17,6 +18,7 @@ import type {
 } from '../../../canvas/persistence-types.js';
 
 export const SQLITE_TEST_WORLD_ID = 'sqlite-test-world';
+export const SQLITE_TEST_WORKSPACE_NAME = 'Test Workspace';
 
 export interface SqliteTestFile {
   readonly directory: string;
@@ -24,15 +26,17 @@ export interface SqliteTestFile {
   readonly remove: () => void;
 }
 
-export interface OpenSqliteTestStore extends SqliteTestFile {
+export interface EmptySqliteTestStore extends SqliteTestFile {
   readonly store: SqliteStructuredStore;
-  readonly world: CanvasFile;
+  readonly context: SqliteStoreContext;
+  readonly workspaceId: string;
+  /** Drop the connection but keep the file, so a test can reopen it. */
+  readonly closeConnection: () => void;
   readonly cleanup: () => Promise<void>;
 }
 
-export interface EmptySqliteTestStore extends SqliteTestFile {
-  readonly store: SqliteStructuredStore;
-  readonly cleanup: () => Promise<void>;
+export interface OpenSqliteTestStore extends EmptySqliteTestStore {
+  readonly world: CanvasFile;
 }
 
 export function createSqliteTestFile(prefix = 'huabu-sqlite-'): SqliteTestFile {
@@ -74,6 +78,7 @@ export function withTestDatabase<T>(
  */
 export function seedSqliteWorld(
   filename: string,
+  workspaceId: string,
   canvasId = SQLITE_TEST_WORLD_ID,
 ): CanvasFile {
   const record: CanvasFile = {
@@ -95,6 +100,7 @@ export function seedSqliteWorld(
     }
     insertSpaceRow(
       database,
+      workspaceId,
       record,
       collisionKeyForTitle(record.title, record.canvasId),
       true,
@@ -103,50 +109,55 @@ export function seedSqliteWorld(
   return record;
 }
 
-export async function openSqliteTestStore(
-  prefix = 'huabu-sqlite-',
-  now?: () => number,
-): Promise<OpenSqliteTestStore> {
-  const file = createSqliteTestFile(prefix);
-  const store = new SqliteStructuredStore(file.filename, now);
-  try {
-    await store.init();
-    const world = seedSqliteWorld(file.filename);
-    return {
-      ...file,
-      store,
-      world,
-      cleanup: async () => {
-        await store.close();
-        file.remove();
-      },
-    };
-  } catch (error) {
-    await store.close();
-    file.remove();
-    throw error;
-  }
-}
-
+/**
+ * Open a store on a fresh file with one activated Workspace.
+ *
+ * Every Space query is Workspace-scoped, so a store with no active Workspace
+ * refuses — the same way a Disk adapter refuses before a workspace path is
+ * committed. Tests get one activated Workspace so they can address Spaces
+ * without repeating the lifecycle.
+ */
 export async function openEmptySqliteTestStore(
   prefix = 'huabu-sqlite-empty-',
   now?: () => number,
 ): Promise<EmptySqliteTestStore> {
   const file = createSqliteTestFile(prefix);
-  const store = new SqliteStructuredStore(file.filename, now);
+  const context = new SqliteStoreContext(file.filename, now);
+  const store = new SqliteStructuredStore(context);
   try {
-    await store.init();
+    context.init();
+    const workspace = await new SqliteWorkspaceRepository(context).create(
+      SQLITE_TEST_WORKSPACE_NAME,
+    );
+    context.useWorkspace(workspace.workspaceId);
     return {
       ...file,
       store,
+      context,
+      workspaceId: workspace.workspaceId,
+      closeConnection: () => context.close(),
       cleanup: async () => {
-        await store.close();
+        context.close();
         file.remove();
       },
     };
   } catch (error) {
-    await store.close();
+    context.close();
     file.remove();
+    throw error;
+  }
+}
+
+export async function openSqliteTestStore(
+  prefix = 'huabu-sqlite-',
+  now?: () => number,
+): Promise<OpenSqliteTestStore> {
+  const opened = await openEmptySqliteTestStore(prefix, now);
+  try {
+    const world = seedSqliteWorld(opened.filename, opened.workspaceId);
+    return { ...opened, world };
+  } catch (error) {
+    await opened.cleanup();
     throw error;
   }
 }

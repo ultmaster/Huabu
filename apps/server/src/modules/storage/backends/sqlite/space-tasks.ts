@@ -13,7 +13,7 @@ import {
 } from '@huabu/shared';
 
 import { withImmediateTransaction } from './database.js';
-import { parseJson, stringifyJson } from './rows.js';
+import { parseJson, spaceRowExists, stringifyJson } from './rows.js';
 
 import type { SqliteStoreContext } from './database.js';
 import type {
@@ -93,10 +93,16 @@ export class SqliteSpaceTasks implements SpaceTasks {
   readonly runs: SpaceTaskRuns;
 
   readonly #context: SqliteStoreContext;
+  readonly #workspaceId: string;
   readonly #canvasId: string;
 
-  constructor(context: SqliteStoreContext, canvasId: string) {
+  constructor(
+    context: SqliteStoreContext,
+    workspaceId: string,
+    canvasId: string,
+  ) {
     this.#context = context;
+    this.#workspaceId = workspaceId;
     this.#canvasId = canvasId;
     this.runs = Object.freeze({
       create: (run: TaskRunRecord) => this.#createRun(run),
@@ -110,8 +116,16 @@ export class SqliteSpaceTasks implements SpaceTasks {
     });
   }
 
+  #workspace(): string {
+    return this.#context.assertBoundWorkspace(
+      this.#workspaceId,
+      `SQLite Space Tasks(${this.#canvasId})`,
+    );
+  }
+
   async read(): Promise<TaskStoreSnapshot> {
     this.#context.assertOpen();
+    this.#workspace();
     return readSnapshot(this.#context, this.#canvasId);
   }
 
@@ -214,14 +228,11 @@ export class SqliteSpaceTasks implements SpaceTasks {
   }
 
   #mutate<T>(apply: (snapshot: TaskStoreSnapshot) => T): T {
+    const workspaceId = this.#workspace();
     this.#context.assertMutationAllowed(this.#canvasId);
     const database = this.#context.database();
     return withImmediateTransaction(database, () => {
-      if (
-        database
-          .prepare('SELECT 1 AS present FROM spaces WHERE canvas_id = ?')
-          .get(this.#canvasId)?.['present'] !== 1
-      ) {
+      if (!spaceRowExists(database, workspaceId, this.#canvasId)) {
         throw new Error(
           `Space Tasks(${this.#canvasId}) cannot write a missing Space`,
         );
