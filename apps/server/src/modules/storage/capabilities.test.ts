@@ -42,11 +42,14 @@ describe('storage capability matrix', () => {
       // A capability nothing can serve is not a limitation, it is a removed
       // feature; one that names no axis at all is served everywhere and does
       // not belong on an exception list.
-      const axes = [capability.structured, capability.blobs].filter(
-        (axis) => axis !== undefined,
-      );
-      expect(axes.length).toBeGreaterThan(0);
-      for (const axis of axes) expect(axis.length).toBeGreaterThan(0);
+      const clauses = [
+        capability.requires.structured,
+        capability.requires.blobs,
+      ].filter((clause) => clause !== undefined);
+      // A requirement with no clauses is met by every profile.
+      expect(clauses.length).toBeGreaterThan(0);
+      // A clause no backend satisfies is a removed feature, not a limitation.
+      for (const clause of clauses) expect(clause.length).toBeGreaterThan(0);
       expect(capability.summary).not.toHaveLength(0);
       expect(capability.rationale).not.toHaveLength(0);
     }
@@ -113,6 +116,31 @@ describe('storage capability matrix', () => {
     expect(hasStorageCapability(OFFSITE_BYTES, 'workspace-directory')).toBe(
       true,
     );
+  });
+
+  it('requires every clause, and any backend within one', () => {
+    // `and` across axes: the hybrid profile satisfies the blob clause of
+    // `space-bundle-export` and fails its structured one, and half a
+    // requirement is not a requirement met.
+    expect(hasStorageCapability(TABLES, 'space-bundle-export')).toBe(false);
+    // ...and the mirror image, which is the disk/azure case above.
+    expect(
+      hasStorageCapability(
+        { structured: { kind: 'disk' }, blobs: { kind: 'azure' } },
+        'space-bundle-export',
+      ),
+    ).toBe(false);
+
+    // `or` within a clause: the one row that names a blob backend is met by
+    // that backend, and an absent clause is met by anything — which is what
+    // lets `reveal-space-folder` survive a blob backend it never named.
+    expect(hasStorageCapability(DISK, 'space-bundle-export')).toBe(true);
+    expect(
+      hasStorageCapability(
+        { structured: { kind: 'disk' }, blobs: { kind: 'azure' } },
+        'reveal-space-folder',
+      ),
+    ).toBe(true);
   });
 
   it('treats an unknown id as available rather than guessing', () => {

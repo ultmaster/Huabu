@@ -56,32 +56,53 @@ import type { StorageProfile } from './profile.js';
  * only the structured axis would call a bundle exportable on a profile that
  * archives a Space folder its artifacts had never been written to.
  *
- * Each axis is a list of the backends that serve the feature, and **omitting
- * an axis means every backend on it serves the feature**. That default is the
- * point rather than a shortcut: a feature that does not touch a Space's bytes
- * must not need editing when a blob backend is added, and the features that
- * do are exactly the ones that should force a decision then. The same holds
- * in reverse for a future feature that depends only on the blob axis.
+ * Each row therefore states a {@link StorageRequirement} rather than a list of
+ * backends: every axis it names must hold, and an axis it does not name is one
+ * it does not depend on.
  */
 export interface StorageCapability {
   /** Stable id, for a diagnostic an operator can search for. */
   readonly id: string;
   /** What a user loses, in their vocabulary rather than the port's. */
   readonly summary: string;
-  /** Structured backends that serve it; omitted means all of them do. */
-  readonly structured?: readonly StructuredBackendKind[];
-  /** Blob backends that serve it; omitted means all of them do. */
-  readonly blobs?: readonly BlobBackendKind[];
+  /** What a deployment must be for this feature to work. */
+  readonly requires: StorageRequirement;
   /** Why it cannot be served elsewhere, and what remains instead. */
   readonly rationale: string;
+}
+
+/**
+ * The condition a profile has to meet, one clause per storage axis.
+ *
+ * **Every clause present must hold** — the axes are an `and`, because a
+ * feature that needs both a Space directory and the Space's bytes inside it
+ * needs both, not either. **Within a clause the backends are an `or`**: the
+ * configured backend has to be one of them.
+ *
+ * So `{ structured: ['disk'], blobs: ['disk'] }` reads "the structured backend
+ * must be Disk *and* the blob backend must be Disk", and a future
+ * `{ structured: ['disk', 'postgres'] }` would read "the structured backend
+ * must be Disk *or* Postgres, and the blob backend may be anything".
+ *
+ * **An absent clause is not a requirement**, so every backend on that axis
+ * passes. That default is the design rather than a shortcut: a feature that
+ * does not touch a Space's bytes must not need editing when a blob backend is
+ * added, and the features that do are exactly the ones that should be forced
+ * to decide then. A requirement with no clauses at all requires nothing, which
+ * is not a limitation — `capabilities.test.ts` rejects one.
+ */
+export interface StorageRequirement {
+  /** Structured backends that satisfy it; absent means any does. */
+  readonly structured?: readonly StructuredBackendKind[];
+  /** Blob backends that satisfy it; absent means any does. */
+  readonly blobs?: readonly BlobBackendKind[];
 }
 
 export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'space-bundle-export',
     summary: 'Export a Space as a .huabu.zip bundle',
-    structured: ['disk'],
-    blobs: ['disk'],
+    requires: { structured: ['disk'], blobs: ['disk'] },
     rationale:
       'The bundle is a Disk projection — the Space directory, archived — so ' +
       'it needs both halves of that directory: the records and the bytes. A ' +
@@ -91,8 +112,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'space-bundle-import',
     summary: 'Import a Space from a .huabu.zip bundle',
-    structured: ['disk'],
-    blobs: ['disk'],
+    requires: { structured: ['disk'], blobs: ['disk'] },
     rationale:
       'Pairs with export; unzips into place, which is only the whole Space ' +
       'where the whole Space is in that place.',
@@ -100,7 +120,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'reveal-space-folder',
     summary: 'Reveal a Space in the OS file manager',
-    structured: ['disk'],
+    requires: { structured: ['disk'] },
     rationale:
       'The feature is "show me this in Finder", and what a user means by ' +
       '"this" is the Space: its record and its node documents. Those are ' +
@@ -111,8 +131,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'builtin-file-tools',
     summary: 'Built-in agent file tools (read, write, glob, grep)',
-    structured: ['disk'],
-    blobs: ['disk'],
+    requires: { structured: ['disk'], blobs: ['disk'] },
     rationale:
       'They sandbox on the Space directory and the documents they exist to ' +
       'edit are the node sidecars under `nodes/`, which are rows here. A ' +
@@ -124,8 +143,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'space-file-plane',
     summary: 'Reach a Space as files over RFS, the plane external agents mount',
-    structured: ['disk'],
-    blobs: ['disk'],
+    requires: { structured: ['disk'], blobs: ['disk'] },
     rationale:
       'RFS projects the Space directory over HTTP — the record and the node ' +
       'sidecars, reachable from another machine. Those are rows here, and a ' +
@@ -138,7 +156,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'external-note-discovery',
     summary: 'Adopt Markdown files dropped into a Space from outside the app',
-    structured: ['disk'],
+    requires: { structured: ['disk'] },
     rationale:
       'It watches `nodes/` for documents that arrived without going through ' +
       'the application. That tier is rows here, and no byte area is a place ' +
@@ -148,7 +166,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'workspace-directory',
     summary: 'Choose, create, or reveal a Workspace folder on this machine',
-    structured: ['disk'],
+    requires: { structured: ['disk'] },
     rationale:
       'A Workspace is a folder the user picks. Where Workspaces are rows ' +
       'there is nothing to browse to: the Server opens its own on first ' +
@@ -159,7 +177,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'workspace-user-memory',
     summary: 'The cross-Space user memory document (setting/user.md)',
-    structured: ['disk'],
+    requires: { structured: ['disk'] },
     rationale:
       'A user-editable file at the Workspace root, deliberately outside any ' +
       'Space so it applies to all of them. The blob port has no ' +
@@ -170,7 +188,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'workspace-user-skills',
     summary: 'User-authored skills under the Workspace setting/skills folder',
-    structured: ['disk'],
+    requires: { structured: ['disk'] },
     rationale:
       'Skills are read as files a user can edit and drop in by hand, which ' +
       'is the same arrival path external notes rely on. Bundled and Agent ' +
@@ -191,13 +209,18 @@ function serves(
   capability: StorageCapability,
   profile: StorageProfile,
 ): boolean {
-  const onAxis = (
-    serving: readonly string[] | undefined,
+  /** One clause: absent requires nothing, present is met by any member. */
+  const satisfied = (
+    allowed: readonly string[] | undefined,
     configured: string,
-  ): boolean => serving === undefined || serving.includes(configured);
+  ): boolean => allowed === undefined || allowed.includes(configured);
+
+  const { structured, blobs } = capability.requires;
+  // Every clause, not any: a feature needing a Space directory *and* the
+  // Space's bytes inside it is not served by half of that.
   return (
-    onAxis(capability.structured, profile.structured.kind) &&
-    onAxis(capability.blobs, profile.blobs.kind)
+    satisfied(structured, profile.structured.kind) &&
+    satisfied(blobs, profile.blobs.kind)
   );
 }
 

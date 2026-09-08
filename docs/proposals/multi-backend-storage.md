@@ -2680,11 +2680,14 @@ too, and that is the blob backend's. A structured-only matrix would call a
 bundle exportable on a profile that archives a Space folder its artifacts had
 never been written to.
 
-Each axis lists the backends that serve the feature, and **omitting an axis
-means every backend on it does**. That default is the point: a feature that
+Each row states a requirement with one clause per axis. **Every clause present
+must hold** (the axes are an `and`) and **within a clause the backends are an
+`or`**, so `{ structured: ['disk'], blobs: ['disk'] }` reads "Disk records
+_and_ Disk bytes". **An absent clause is not a requirement**, so any backend on
+that axis passes — which is the point rather than a shortcut: a feature that
 does not touch a Space's bytes must not need editing when a blob backend is
-added, and the ones that do are exactly the ones that should force a decision
-then.
+added, and the ones that do are exactly the ones that should be forced to
+decide then.
 
 On the hybrid profile the answer is unchanged — a real file system for the
 bytes hands nothing back, because every row still needs the record and node
