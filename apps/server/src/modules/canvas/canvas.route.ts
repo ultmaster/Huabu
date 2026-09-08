@@ -59,6 +59,7 @@ import {
   deleteSpace,
   isWorldCanvasId,
   stageSpaceImport,
+  storageServes,
   unavailableCapabilityMessage,
   getStructuredStore,
   type CanvasFile,
@@ -1621,7 +1622,10 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     // missing are different problems with different remedies, so they get
     // different answers — the first repeats the matrix sentence the operator
     // read when they chose the profile.
-    const tree = handle.diskTree;
+    // The matrix decides, and `diskTree` only supplies the path. Asking it
+    // directly would re-derive the requirement, and this one already spans
+    // both axes: a bundle needs the Space's bytes in the folder it archives.
+    const tree = storageServes('reveal-space-folder') ? handle.diskTree : null;
     if (!tree) {
       return reply.code(400).send({
         message: unavailableCapabilityMessage('reveal-space-folder'),
@@ -1667,7 +1671,10 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     // a portable export generated from records plus reachable blob references
     // is a separate later design. Refuse in the matrix's own words, and keep
     // that distinct from a Space whose directory has gone missing.
-    const tree = handle.diskTree;
+    // The matrix decides, and `diskTree` only supplies the path. Asking it
+    // directly would re-derive the requirement, and this one already spans
+    // both axes: a bundle needs the Space's bytes in the folder it archives.
+    const tree = storageServes('space-bundle-export') ? handle.diskTree : null;
     if (!tree) {
       return reply.code(400).send({
         message: unavailableCapabilityMessage('space-bundle-export'),
@@ -1739,7 +1746,12 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
       // staging location, the title-derived directory, the record filename,
       // and the index entry are all layout. This route owns the `.huabu.zip`
       // format and nothing else (proposal §12.6.2).
-      const staged = stageSpaceImport(targetCanvasId);
+      // Same rule as export: the matrix decides, and staging only supplies
+      // the place. Import needs the bytes to land in the folder too, so the
+      // requirement spans both axes and re-deriving it here would miss that.
+      const staged = storageServes('space-bundle-import')
+        ? stageSpaceImport(targetCanvasId)
+        : null;
       if (!staged) {
         return reply.code(400).send({
           message: unavailableCapabilityMessage('space-bundle-import'),

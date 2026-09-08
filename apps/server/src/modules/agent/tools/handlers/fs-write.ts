@@ -35,13 +35,10 @@ import { normalizeRel } from './fs-sandbox.js';
 import {
   space,
   SPACE_MEMORY_BLOB_NAME,
+  storageServes,
   unavailableCapabilityMessage,
 } from '../../../storage/index.js';
-import {
-  hasWorkspaceSettingDirectory,
-  settingDir,
-  userSkillsDir,
-} from '../../../workspace/paths.js';
+import { settingDir, userSkillsDir } from '../../../workspace/paths.js';
 import {
   resolveLongTermPath,
   resolveUserSkillPath,
@@ -121,7 +118,7 @@ function resolveTarget(
     // Refused in the words the profile declared, rather than crashing on a
     // path the backend cannot build. A Space's own memory body still works —
     // it is a blob, not a Workspace file.
-    if (!hasWorkspaceSettingDirectory()) {
+    if (!storageServes('workspace-user-memory')) {
       return {
         path: rel,
         error: unavailableCapabilityMessage('workspace-user-memory'),
@@ -171,7 +168,7 @@ function resolveTarget(
         error: `fs_write only accepts skill paths of the form "skills/<id>/SKILL.md"`,
       };
     }
-    if (!hasWorkspaceSettingDirectory()) {
+    if (!storageServes('workspace-user-skills')) {
       return {
         path: rel,
         error: unavailableCapabilityMessage('workspace-user-skills'),

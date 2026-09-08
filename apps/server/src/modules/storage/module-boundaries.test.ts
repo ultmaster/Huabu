@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { STORAGE_CAPABILITIES } from './capabilities.js';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STORAGE_DIR = HERE;
 const SRC_DIR = path.resolve(HERE, '../..');
@@ -173,6 +175,29 @@ describe('storage dependency direction', () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  /**
+   * A declared capability is refused somewhere, or it is not a capability.
+   *
+   * `capabilities.ts` promises that every row also refuses at its own call
+   * site, "because a matrix nobody consults at runtime is documentation". This
+   * is that promise, checked. It catches the two ways it rots: a row added for
+   * an operator's benefit that no feature ever asks about, and a refusal
+   * deleted while its row stays behind, still printed at boot.
+   */
+  it('refuses every capability it declares, outside the storage module', () => {
+    const consumers = sourceFiles
+      .filter((f) => !f.startsWith('modules/storage/'))
+      .filter((f) => !f.endsWith('.test.ts'))
+      .map((f) => read(f));
+
+    const unenforced = STORAGE_CAPABILITIES.filter(
+      (capability) =>
+        !consumers.some((source) => source.includes(`'${capability.id}'`)),
+    ).map((capability) => capability.id);
+
+    expect(unenforced).toEqual([]);
   });
 
   /**

@@ -2673,12 +2673,23 @@ same cascade as everything else.
 These capabilities are Disk-only, declared in `storage/capabilities.ts`,
 logged at startup, and refused at their own call sites in the same words.
 
-They are keyed on the **structured** backend, and the hybrid profile is what
-makes that worth stating: every one needs the Space's record and node
-documents to exist as files, and a real file system for the Space's _bytes_
-gives none of them back. Each refusal keys on `Space.diskTree` being `null`,
-which is a structured-backend fact — the byte directory is not a Space tree,
-and `detached-blobs.test.ts` pins that.
+They are keyed on the **profile**, not on one axis. Most need a Space or a
+Workspace to be a real directory, which is a structured-backend property; four
+need more than that — they need the Space's _bytes_ to be in that directory
+too, and that is the blob backend's. A structured-only matrix would call a
+bundle exportable on a profile that archives a Space folder its artifacts had
+never been written to.
+
+Each axis lists the backends that serve the feature, and **omitting an axis
+means every backend on it does**. That default is the point: a feature that
+does not touch a Space's bytes must not need editing when a blob backend is
+added, and the ones that do are exactly the ones that should force a decision
+then.
+
+On the hybrid profile the answer is unchanged — a real file system for the
+bytes hands nothing back, because every row still needs the record and node
+documents to be files. `detached-blobs.test.ts` pins the fact underneath that:
+bytes are files and `Space.diskTree` is still `null`.
 
 | Capability                                    | What is lost                                        | Why it is not emulated                                                                                                                                                                       |
 | --------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2690,14 +2701,28 @@ and `detached-blobs.test.ts` pins that.
 | `external-note-discovery`                     | Adopting Markdown dropped into a Space from outside | It watches for documents that arrived without going through the application. A database has no such arrival path.                                                                            |
 | `workspace-user-memory`                       | `setting/user.md`, the cross-Space memory document  | A file the user edits at the root of a Workspace they chose. The blob port has no Workspace-level scope, so it has none to live in. A Space's _own_ memory body is a blob and is unaffected. |
 | `workspace-user-skills`                       | `setting/skills/<id>/SKILL.md`                      | Same arrival path as external notes. Bundled and Agent Team skills are unaffected.                                                                                                           |
-| `space-directory-handle-coordination`         | Windows rename-while-watched                        | Nothing renames a byte directory keyed by id, and with note discovery off nothing watches it. No handles to arbitrate.                                                                       |
 
-One further limit is not a capability row because nothing refuses it; it is
-simply a property of the backend:
+Two further limits are not capability rows, because nothing refuses them and
+a row nothing can refuse is a fact about a backend rather than a capability:
+
+- **Windows directory-handle coordination.** It exists so renaming a Space
+  directory can succeed against a live `fs.watch` handle. A Space that is a
+  row is never filed under its title and nothing watches it, so no handle is
+  ever registered and nothing asks. It was listed as a capability and removed:
+  reading "unavailable" told an operator they had lost something, when the
+  profile simply does not have the problem.
 
 - **Multi-process access.** One process, one connection. WAL and
   `busy_timeout` make a second reader survivable, and nothing here promises a
   multi-process deletion fence or a distributed transaction.
+
+Two rules keep the call sites honest, and `module-boundaries.test.ts` checks
+the first: a **refusal asks the matrix** through `storageServes(id)` on the
+composition root, never a re-derivation such as "is there a `diskTree`",
+because a re-derivation is a second copy of the rule that never learns when a
+row grows a second axis. A **degradation does not** — code that renders
+absence instead of refusing asks the concrete predicate, because it is not
+making the profile's promise.
 
 #### 12.9.5 Proof
 

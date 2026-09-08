@@ -48,6 +48,7 @@ import {
 } from './backends/sqlite/database.js';
 import { SqliteStructuredStore } from './backends/sqlite/structured-store.js';
 import { SqliteWorkspaceRepository } from './backends/sqlite/workspace-repository.js';
+import { hasStorageCapability } from './capabilities.js';
 import { spaceBlobAreas } from './ports/blob.js';
 import {
   parseStorageProfile,
@@ -393,6 +394,23 @@ export function getWorkspaceRepository(): WorkspaceRepository {
       ? new SqliteWorkspaceRepository(sqliteConnection())
       : new DiskWorkspaceRepository(workspaceRegistryPath());
   return workspaces;
+}
+
+/**
+ * Whether the profile in force serves `id`.
+ *
+ * The one form application code should use. `hasStorageCapability` takes a
+ * profile, and the only profile worth asking about is the one storage was
+ * actually opened with — a call site that parses the environment instead gets
+ * a different answer the moment a test or an embedder mounts an explicit
+ * profile. Binding it here removes the choice.
+ *
+ * Ask this in a refusal. Code that degrades to absence instead of refusing
+ * should keep asking the concrete predicate it depends on; see
+ * `capabilities.ts`.
+ */
+export function storageServes(id: string): boolean {
+  return hasStorageCapability(activeProfile(), id);
 }
 
 /**

@@ -113,8 +113,7 @@ import {
   interactiveViewService,
 } from '../interactive-view/interactive-view.service.js';
 import {
-  hasStorageCapability,
-  parseStorageProfile,
+  storageServes,
   unavailableCapabilityMessage,
 } from '../storage/index.js';
 import {
@@ -266,7 +265,7 @@ const rfsRoutes: FastifyPluginAsync = async (app) => {
   // `space-file-plane` capability. One hook, because every route below
   // resolves a real path sooner or later.
   app.addHook('onRequest', async (_request, reply) => {
-    if (hasStorageCapability(parseStorageProfile(), 'space-file-plane')) return;
+    if (storageServes('space-file-plane')) return;
     return reply
       .code(409)
       .send(rfsError(unavailableCapabilityMessage('space-file-plane')));

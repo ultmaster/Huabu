@@ -116,11 +116,16 @@ export {
 } from './profile.js';
 export {
   describeUnavailableCapabilities,
-  hasStorageCapability,
   STORAGE_CAPABILITIES,
   unavailableCapabilities,
   unavailableCapabilityMessage,
 } from './capabilities.js';
+/**
+ * Capability questions are asked of the profile in force, never of one the
+ * caller assembled — so the bound accessor is what leaves the module and
+ * `hasStorageCapability` stays inside it.
+ */
+export { storageServes } from './storage.js';
 export type { StorageCapability } from './capabilities.js';
 export type { StorageProfile } from './profile.js';
 export {

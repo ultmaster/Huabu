@@ -13,6 +13,7 @@ import {
   getStructuredStore,
   materializesWorkspaces,
   resetStorageCache,
+  storageServes,
   unavailableCapabilityMessage,
 } from './storage/index.js';
 import {
@@ -205,7 +206,7 @@ const workspaceRoutes: FastifyPluginAsync = async (app) => {
       if (isManagedMode()) {
         return sendError(reply, 403, 'Workspace is locked');
       }
-      if (!materializesWorkspaces()) {
+      if (!storageServes('workspace-directory')) {
         return sendError(
           reply,
           409,
@@ -272,7 +273,7 @@ const workspaceRoutes: FastifyPluginAsync = async (app) => {
         'Forbidden: workspace settings can only be changed from localhost',
       );
     }
-    if (!materializesWorkspaces()) {
+    if (!storageServes('workspace-directory')) {
       return sendError(
         reply,
         409,

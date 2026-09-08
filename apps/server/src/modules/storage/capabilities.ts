@@ -22,67 +22,85 @@
  * This is a *declaration*, not an enforcement point. Each listed feature also
  * refuses at its own call site, because a matrix nobody consults at runtime is
  * documentation. What the matrix adds is the up-front answer.
+ *
+ * Two rules keep those call sites honest:
+ *
+ *   - **A refusal asks the matrix.** `storageServes(id)` on the composition
+ *     root, never a re-derivation of the requirement such as "is there a
+ *     `diskTree`". A gate that re-derives is a second copy of the rule, and it
+ *     is how a row could grow a blob-axis requirement its own call site never
+ *     learned about.
+ *   - **A degradation does not.** Code that renders absence rather than
+ *     refusing — the memory preamble reading as empty — asks the concrete
+ *     predicate, because it is not making the profile's promise, only reading
+ *     what is there.
+ *
+ * Every row must therefore be refusable. A property that nothing can ask about
+ * is not a capability: it is a fact about a backend, and it belongs in that
+ * backend's own commentary. Windows directory-handle coordination was listed
+ * here and removed for exactly that reason — a Space with no directory
+ * registers no handle owner, so nothing ever asks and nothing is lost.
  */
 
+import type { BlobBackendKind } from './ports/blob.js';
 import type { StructuredBackendKind } from './ports/structured.js';
 import type { StorageProfile } from './profile.js';
 
 /**
- * A product feature whose availability depends on the structured backend.
+ * A product feature some storage profiles cannot serve.
  *
- * Keyed by structured kind alone: every entry here needs a Space to be a real
- * directory, which is a structured-backend property.
+ * Keyed on the **profile**, not on one axis. Most entries need a Space or a
+ * Workspace to be a real directory, which is a structured-backend property —
+ * but several need more than that: they need the Space's *bytes* to be in that
+ * directory too, and that is the blob backend's business. A matrix that asked
+ * only the structured axis would call a bundle exportable on a profile that
+ * archives a Space folder its artifacts had never been written to.
  *
- * Four of them need slightly more than that — they need the Space's *bytes* to
- * be in that directory too. Bundle export archives the folder, bundle import
- * unzips into it, reveal-in-file-manager shows it, and the built-in file tools
- * sandbox on it; a Space whose artifacts had been relocated elsewhere would
- * export as an incomplete bundle rather than fail. Today that is free: the one
- * blob backend is a file system, and composition places a Space's bytes inside
- * its directory whenever it has one (`storage.ts::buildBlobStore`). A blob
- * backend that *cannot* co-locate — an object store — would break the
- * implication, and those four rows would then have to be keyed on the profile
- * rather than on the structured kind. That is the second matrix this comment
- * used to say did not exist; it does not exist yet.
+ * Each axis is a list of the backends that serve the feature, and **omitting
+ * an axis means every backend on it serves the feature**. That default is the
+ * point rather than a shortcut: a feature that does not touch a Space's bytes
+ * must not need editing when a blob backend is added, and the features that
+ * do are exactly the ones that should force a decision then. The same holds
+ * in reverse for a future feature that depends only on the blob axis.
  */
 export interface StorageCapability {
   /** Stable id, for a diagnostic an operator can search for. */
   readonly id: string;
   /** What a user loses, in their vocabulary rather than the port's. */
   readonly summary: string;
-  /** Structured backends that serve it. */
-  readonly backends: readonly StructuredBackendKind[];
+  /** Structured backends that serve it; omitted means all of them do. */
+  readonly structured?: readonly StructuredBackendKind[];
+  /** Blob backends that serve it; omitted means all of them do. */
+  readonly blobs?: readonly BlobBackendKind[];
   /** Why it cannot be served elsewhere, and what remains instead. */
   readonly rationale: string;
 }
 
-/**
- * Every feature that is not available on every backend.
- *
- * Deliberately not "every feature" — a matrix that listed the portable ones
- * too would need updating whenever anything was built, and would go stale
- * silently. What must stay accurate is the exception list.
- */
 export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'space-bundle-export',
     summary: 'Export a Space as a .huabu.zip bundle',
-    backends: ['disk'],
+    structured: ['disk'],
+    blobs: ['disk'],
     rationale:
-      'The bundle is a Disk projection — the Space directory, archived. A ' +
+      'The bundle is a Disk projection — the Space directory, archived — so ' +
+      'it needs both halves of that directory: the records and the bytes. A ' +
       'portable export generated from records plus reachable blob references ' +
       'is a separate design.',
   },
   {
     id: 'space-bundle-import',
     summary: 'Import a Space from a .huabu.zip bundle',
-    backends: ['disk'],
-    rationale: 'Pairs with export; unzips into place.',
+    structured: ['disk'],
+    blobs: ['disk'],
+    rationale:
+      'Pairs with export; unzips into place, which is only the whole Space ' +
+      'where the whole Space is in that place.',
   },
   {
     id: 'reveal-space-folder',
     summary: 'Reveal a Space in the OS file manager',
-    backends: ['disk'],
+    structured: ['disk'],
     rationale:
       'The feature is "show me this in Finder", and what a user means by ' +
       '"this" is the Space: its record and its node documents. Those are ' +
@@ -93,7 +111,8 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'builtin-file-tools',
     summary: 'Built-in agent file tools (read, write, glob, grep)',
-    backends: ['disk'],
+    structured: ['disk'],
+    blobs: ['disk'],
     rationale:
       'They sandbox on the Space directory and the documents they exist to ' +
       'edit are the node sidecars under `nodes/`, which are rows here. A ' +
@@ -105,7 +124,8 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'space-file-plane',
     summary: 'Reach a Space as files over RFS, the plane external agents mount',
-    backends: ['disk'],
+    structured: ['disk'],
+    blobs: ['disk'],
     rationale:
       'RFS projects the Space directory over HTTP — the record and the node ' +
       'sidecars, reachable from another machine. Those are rows here, and a ' +
@@ -118,7 +138,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'external-note-discovery',
     summary: 'Adopt Markdown files dropped into a Space from outside the app',
-    backends: ['disk'],
+    structured: ['disk'],
     rationale:
       'It watches `nodes/` for documents that arrived without going through ' +
       'the application. That tier is rows here, and no byte area is a place ' +
@@ -128,7 +148,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'workspace-directory',
     summary: 'Choose, create, or reveal a Workspace folder on this machine',
-    backends: ['disk'],
+    structured: ['disk'],
     rationale:
       'A Workspace is a folder the user picks. Where Workspaces are rows ' +
       'there is nothing to browse to: the Server opens its own on first ' +
@@ -139,7 +159,7 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'workspace-user-memory',
     summary: 'The cross-Space user memory document (setting/user.md)',
-    backends: ['disk'],
+    structured: ['disk'],
     rationale:
       'A user-editable file at the Workspace root, deliberately outside any ' +
       'Space so it applies to all of them. The blob port has no ' +
@@ -150,47 +170,60 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   {
     id: 'workspace-user-skills',
     summary: 'User-authored skills under the Workspace setting/skills folder',
-    backends: ['disk'],
+    structured: ['disk'],
     rationale:
       'Skills are read as files a user can edit and drop in by hand, which ' +
       'is the same arrival path external notes rely on. Bundled and Agent ' +
       'Team skills are unaffected.',
   },
-  {
-    id: 'space-directory-handle-coordination',
-    summary: 'Windows: rename or delete a Space while a watcher holds it open',
-    backends: ['disk'],
-    rationale:
-      'Exists so renaming a Space *directory* can succeed against a live ' +
-      '`fs.watch` handle. A Space that is a row is never filed under its ' +
-      'title, so nothing renames its byte directory, and with external-note ' +
-      'discovery unavailable nothing watches it either. No rename and no ' +
-      'watcher, so there are no handles to arbitrate.',
-  },
 ];
+
+/**
+ * Whether one profile serves one capability.
+ *
+ * An axis the capability does not name is an axis it does not depend on, so
+ * every backend there passes. A profile may request a backend that has no
+ * adapter — `validateStorageProfile` is what rejects those — and such a kind
+ * appears in no list, which is the right answer: an unwritten backend serves
+ * nothing.
+ */
+function serves(
+  capability: StorageCapability,
+  profile: StorageProfile,
+): boolean {
+  const onAxis = (
+    serving: readonly string[] | undefined,
+    configured: string,
+  ): boolean => serving === undefined || serving.includes(configured);
+  return (
+    onAxis(capability.structured, profile.structured.kind) &&
+    onAxis(capability.blobs, profile.blobs.kind)
+  );
+}
 
 /** Capabilities this profile cannot serve. */
 export function unavailableCapabilities(
   profile: StorageProfile,
 ): readonly StorageCapability[] {
   return STORAGE_CAPABILITIES.filter(
-    (capability) =>
-      !(capability.backends as readonly string[]).includes(
-        profile.structured.kind,
-      ),
+    (capability) => !serves(capability, profile),
   );
 }
 
-/** Whether this profile serves `id`. Unknown ids are available by omission. */
+/**
+ * Whether this profile serves `id`. Unknown ids are available by omission.
+ *
+ * Application code should not reach this directly — the only profile worth
+ * asking about is the one storage was opened with, and the composition root's
+ * `storageServes(id)` is bound to it. This form exists for the matrix's own
+ * tests, which need to ask about profiles the process is not running.
+ */
 export function hasStorageCapability(
   profile: StorageProfile,
   id: string,
 ): boolean {
   const capability = STORAGE_CAPABILITIES.find((entry) => entry.id === id);
-  if (!capability) return true;
-  return (capability.backends as readonly string[]).includes(
-    profile.structured.kind,
-  );
+  return capability === undefined || serves(capability, profile);
 }
 
 /**
@@ -223,9 +256,10 @@ export function unavailableCapabilityMessage(id: string): string {
 export function describeUnavailableCapabilities(
   profile: StorageProfile,
 ): readonly string[] {
+  const label = `${profile.structured.kind}/${profile.blobs.kind}`;
   return unavailableCapabilities(profile).map(
     (capability) =>
       `${capability.id}: ${capability.summary} — unavailable on the ` +
-      `"${profile.structured.kind}" structured backend. ${capability.rationale}`,
+      `"${label}" storage profile. ${capability.rationale}`,
   );
 }

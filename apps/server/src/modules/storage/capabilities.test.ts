@@ -39,9 +39,14 @@ describe('storage capability matrix', () => {
     expect(new Set(ids).size).toBe(ids.length);
 
     for (const capability of STORAGE_CAPABILITIES) {
-      expect(capability.backends.length).toBeGreaterThan(0);
       // A capability nothing can serve is not a limitation, it is a removed
-      // feature; a capability every backend serves does not belong here.
+      // feature; one that names no axis at all is served everywhere and does
+      // not belong on an exception list.
+      const axes = [capability.structured, capability.blobs].filter(
+        (axis) => axis !== undefined,
+      );
+      expect(axes.length).toBeGreaterThan(0);
+      for (const axis of axes) expect(axis.length).toBeGreaterThan(0);
       expect(capability.summary).not.toHaveLength(0);
       expect(capability.rationale).not.toHaveLength(0);
     }
@@ -66,6 +71,48 @@ describe('storage capability matrix', () => {
     expect(missing).toEqual(STORAGE_CAPABILITIES);
     expect(hasStorageCapability(TABLES, 'reveal-space-folder')).toBe(false);
     expect(hasStorageCapability(DISK, 'reveal-space-folder')).toBe(true);
+  });
+
+  /**
+   * The reason the matrix is keyed on the profile rather than on one axis.
+   *
+   * `disk`/`azure` has no adapter and `validateStorageProfile` would refuse
+   * it, which is exactly why it is the right shape to assert against: the
+   * matrix must already answer correctly for the pairing before anyone can
+   * select it. Records are files here and Spaces are real directories — a
+   * structured-only matrix would call the bundle exportable, and it would
+   * archive a Space folder whose artifacts had never been written to it.
+   */
+  it('takes the bundle with a blob backend that cannot co-locate', () => {
+    const OFFSITE_BYTES: StorageProfile = {
+      structured: { kind: 'disk' },
+      blobs: { kind: 'azure' },
+    };
+
+    expect(hasStorageCapability(OFFSITE_BYTES, 'space-bundle-export')).toBe(
+      false,
+    );
+    expect(hasStorageCapability(OFFSITE_BYTES, 'space-bundle-import')).toBe(
+      false,
+    );
+    expect(hasStorageCapability(OFFSITE_BYTES, 'builtin-file-tools')).toBe(
+      false,
+    );
+    expect(hasStorageCapability(OFFSITE_BYTES, 'space-file-plane')).toBe(false);
+
+    // What survives: the Space folder still holds the record and the node
+    // documents, so showing it to a user is still showing them the Space, and
+    // a note dropped into `nodes/` still arrives. Those rows name no blob
+    // axis, which is how they say they do not care where the bytes went.
+    expect(hasStorageCapability(OFFSITE_BYTES, 'reveal-space-folder')).toBe(
+      true,
+    );
+    expect(hasStorageCapability(OFFSITE_BYTES, 'external-note-discovery')).toBe(
+      true,
+    );
+    expect(hasStorageCapability(OFFSITE_BYTES, 'workspace-directory')).toBe(
+      true,
+    );
   });
 
   it('treats an unknown id as available rather than guessing', () => {
@@ -93,7 +140,8 @@ describe('storage capability matrix', () => {
       expect(line).toBeDefined();
       // The id to search for, what is lost, and why it cannot be emulated.
       expect(line).toContain(capability.summary);
-      expect(line).toContain('sqlite');
+      // The whole profile, because a row may be unavailable for either axis.
+      expect(line).toContain('sqlite/disk');
     }
   });
 });
