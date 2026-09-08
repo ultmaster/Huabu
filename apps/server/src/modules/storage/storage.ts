@@ -24,10 +24,7 @@
  */
 
 import { rm } from 'node:fs/promises';
-import path from 'node:path';
 
-import { getDataDir } from '../../data-dir.js';
-import { sanitizeId } from '../../utils/fs.js';
 import {
   acquireWorkspaceOperationLease,
   commitWorkspaceIdentity,
@@ -36,14 +33,18 @@ import {
 } from '../workspace.js';
 import { DiskBlobStore } from './backends/disk/blob-store.js';
 import { getWorldCanvasId as diskWorldCanvasId } from './backends/disk/canvas-dirs.js';
+import {
+  diskSpaceBlobRoot,
+  workspaceRegistryPath,
+} from './backends/disk/data-dir.js';
 import { stageDiskSpaceImport } from './backends/disk/space-import.js';
 import { diskSpaceTree } from './backends/disk/space-tree.js';
 import { DiskStructuredStore } from './backends/disk/structured-store.js';
+import { DiskWorkspaceRepository } from './backends/disk/workspace-repository.js';
 import {
-  DiskWorkspaceRepository,
-  workspaceRegistryPath,
-} from './backends/disk/workspace-repository.js';
-import { SqliteStoreContext } from './backends/sqlite/database.js';
+  SqliteStoreContext,
+  sqliteDatabasePath,
+} from './backends/sqlite/database.js';
 import { SqliteStructuredStore } from './backends/sqlite/structured-store.js';
 import { SqliteWorkspaceRepository } from './backends/sqlite/workspace-repository.js';
 import { spaceBlobAreas } from './ports/blob.js';
@@ -114,39 +115,15 @@ function assertActiveWorkspace(workspaceKey: string, canvasId: string): void {
 }
 
 /**
- * Where the SQLite profile keeps its records.
- *
- * One file, beside the Disk backend's own registry in the data directory, so
- * an operator can find both in the same place. `HUABU_SQLITE_PATH` overrides
- * it for deployments that keep their database elsewhere. A Space's *bytes* are
- * not in it — see {@link detachedBlobRoot}.
- */
-export function sqliteDatabasePath(dataDir: string = getDataDir()): string {
-  const configured = process.env['HUABU_SQLITE_PATH']?.trim();
-  if (configured) return configured;
-  return path.join(dataDir, 'storage', 'sqlite', 'huabu.sqlite');
-}
-
-/**
  * Where a Space keeps its bytes when the structured backend has no folder for
  * it.
  *
  * Blobs are always files (`ports/blob.ts`), so a profile whose records are
- * rows still needs somewhere on a file system to put uploads, artifacts, the
- * guide document and the memory body. The Server owns that directory rather
- * than the user: it is not a Workspace folder, nothing in it is a Space
- * record, and none of the Disk-only features that need a real Space tree
- * become available because it exists.
- *
- * Scoped by Workspace first, because a Space belongs to exactly one and its
- * bytes should travel and be removed with it. `HUABU_BLOB_ROOT` overrides the
- * base for deployments that keep bytes on a different volume.
+ * rows still needs somewhere on a file system for uploads, artifacts, the
+ * guide document and the memory body. *Which* directory is the Disk blob
+ * adapter's own business — this only supplies the Workspace the Space belongs
+ * to, which is the one part of the answer the adapter cannot know.
  */
-export function detachedBlobRoot(dataDir: string = getDataDir()): string {
-  const configured = process.env['HUABU_BLOB_ROOT']?.trim();
-  return configured ? configured : path.join(dataDir, 'storage', 'blobs');
-}
-
 function detachedSpaceRoot(canvasId: string): string {
   const workspace = getWorkspaceHandle();
   if (!workspace) {
@@ -155,11 +132,7 @@ function detachedSpaceRoot(canvasId: string): string {
         'Activate one before reading or writing bytes.',
     );
   }
-  return path.join(
-    detachedBlobRoot(),
-    sanitizeId(workspace.workspaceId, 'workspaceId'),
-    sanitizeId(canvasId, 'canvasId'),
-  );
+  return diskSpaceBlobRoot(workspace.workspaceId, canvasId);
 }
 
 /**
@@ -400,7 +373,7 @@ export function getWorkspaceRepository(): WorkspaceRepository {
   workspaces =
     profile.structured.kind === 'sqlite'
       ? new SqliteWorkspaceRepository(sqliteConnection())
-      : new DiskWorkspaceRepository(workspaceRegistryPath(getDataDir()));
+      : new DiskWorkspaceRepository(workspaceRegistryPath());
   return workspaces;
 }
 

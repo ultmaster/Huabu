@@ -5,12 +5,11 @@
  * The one SQLite connection a process holds, and the state that lives as long
  * as it does.
  *
- * Both storage axes share this object when the profile selects SQLite for
- * either of them. That is not a convenience: the structured records and the
- * blob bytes are in one database file, so two connections would be two
- * writers to the same file, and SQLite's answer to that is a lock error rather
- * than a queue. One connection also makes the ordered Space write a real
- * transaction across everything it touches.
+ * The structured store and the Workspace repository share this object. That is
+ * not a convenience: they are one database file, so two connections would be
+ * two writers to it, and SQLite's answer to that is a lock error rather than a
+ * queue. One connection also makes the ordered Space write a real transaction
+ * across everything it touches.
  *
  * The active Workspace is held here for the same reason the Disk adapters hold
  * the active workspace path: it is the namespace every query is scoped to.
@@ -23,6 +22,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { SQLITE_MIGRATIONS, type SqliteMigration } from './schema.js';
+import { getDataDir } from '../../../../data-dir.js';
 import {
   assertSpaceMutationAllowed,
   beginSpaceDeleteAdmission,
@@ -44,6 +44,24 @@ export const SQLITE_WORLD_COLLISION_KEY = '.world';
 
 /** Milliseconds a statement waits for a lock before reporting SQLITE_BUSY. */
 const BUSY_TIMEOUT_MS = 5_000;
+
+/**
+ * Where this backend keeps its records in the Server data directory.
+ *
+ * One file, under a directory named for the backend the way
+ * `storage/disk/` names the other one, so an operator finds both in the same
+ * place. `HUABU_SQLITE_PATH` replaces it for a deployment that keeps its
+ * database elsewhere.
+ *
+ * Records only. A Space's *bytes* are the blob axis's business wherever this
+ * backend is selected, and this backend never learns where they went — see
+ * `backends/disk/data-dir.ts`.
+ */
+export function sqliteDatabasePath(dataDir: string = getDataDir()): string {
+  const configured = process.env['HUABU_SQLITE_PATH']?.trim();
+  if (configured) return configured;
+  return path.join(dataDir, 'storage', 'sqlite', 'huabu.sqlite');
+}
 
 function readUserVersion(database: DatabaseSync): number {
   const row = database.prepare('PRAGMA user_version').get();

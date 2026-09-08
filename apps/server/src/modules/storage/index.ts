@@ -95,7 +95,6 @@ export {
   materializesWorkspaces,
   setStorageForTesting,
   space,
-  sqliteDatabasePath,
   stageSpaceImport,
   storageHealth,
   workspaceAtDirectory,

@@ -2546,20 +2546,28 @@ say plainly what it gives up by doing so.
 `HUABU_STRUCTURED_BACKEND=sqlite` is the profile. Every record — Workspaces,
 Spaces, nodes, events, changes, Tasks, extension namespaces, and agent
 conversations — is a row in one file at
-`<data dir>/storage/sqlite/huabu.sqlite` (override with `HUABU_SQLITE_PATH`),
-beside the Disk backend's own registry at `<data dir>/storage/disk/`.
+`<data dir>/storage/sqlite/huabu.sqlite` (override with `HUABU_SQLITE_PATH`).
 
 The blob axis stays `disk`, and there is no SQLite blob adapter. **Bytes are
 always a file system** — a local directory now, Azure Blob later — so no
 structured backend is asked to hold them and the two axes genuinely share
 nothing. A Space's bytes therefore need a directory even where its record does
-not: composition supplies `<data dir>/storage/blobs/<workspaceId>/<canvasId>/`
-(override the base with `HUABU_BLOB_ROOT`) and hands it to the same Disk blob
-adapter, which writes the same area layout it writes inside a Space folder.
-That directory is Server-owned and holds nothing but bytes; it is not a
-Workspace folder and it is not a Space tree, so none of §12.9.4's Disk-only
+not: the Disk blob adapter writes them to
+`<data dir>/storage/disk/blobs/<workspaceId>/<canvasId>/` (override the base
+with `HUABU_BLOB_ROOT`), in the same area layout it writes inside a Space
+folder. That directory is Server-owned and holds nothing but bytes; it is not
+a Workspace folder and it is not a Space tree, so none of §12.9.4's Disk-only
 capabilities become available because it exists. Postgres and Azure Blob
 adapters still do not exist.
+
+Each directory under `<data dir>/storage/` is named for the backend that owns
+it, and each backend decides its own layout in one file —
+`backends/disk/data-dir.ts` and `backends/sqlite/database.ts`. The composition
+root asks and builds no path of its own, which `module-boundaries.test.ts`
+enforces. `storage/disk/` has two owners and therefore two subtrees: the
+structured store's `workspaces.json` Workspace registry, and the blob store's
+`blobs/`. Keeping the registry outside `blobs/` is not tidiness — the blob
+store deletes whole directories, and the registry is not its to delete.
 
 #### 12.9.1 Scope and lifecycle
 
@@ -2687,7 +2695,8 @@ is still there after a restart. That suite names no directory and no filename;
 `module-boundaries.test.ts` enforces that mechanically. What _is_ about
 placement has its own small suite instead (`detached-blobs.test.ts`): bytes
 land as real files under the Workspace-scoped root, one Workspace's root is
-not another's, and deleting a Space leaves no directory behind.
+not another's, deleting a Space leaves no directory behind, and the Workspace
+registry sits outside the blob root so no byte sweep can reach it.
 
 SQLite integration tests additionally cover strict schema creation, WAL and
 foreign-key pragmas read back on a second connection, close/reopen

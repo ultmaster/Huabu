@@ -17,13 +17,18 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import {
+  diskBlobRoot,
+  diskDataDir,
+  diskSpaceBlobRoot,
+  workspaceRegistryPath,
+} from './backends/disk/data-dir.js';
 import { ARTIFACTS_DIR_NAME } from './backends/disk/layout.js';
 import {
   activateWorkspace,
   createNamedWorkspace,
   createSpace,
   deleteSpace,
-  detachedBlobRoot,
   space,
 } from './storage.js';
 import { mountTestWorkspace, type MountedTestStorage } from './testing.js';
@@ -56,11 +61,13 @@ function artifactsDirectory(canvasId: string): string {
   const workspace = getWorkspaceHandle();
   if (!workspace) throw new Error('Expected an active Workspace');
   return path.join(
-    detachedBlobRoot(),
-    workspace.workspaceId,
-    canvasId,
+    diskSpaceBlobRoot(workspace.workspaceId, canvasId),
     ARTIFACTS_DIR_NAME,
   );
+}
+
+function isInside(parent: string, child: string): boolean {
+  return path.resolve(child).startsWith(`${path.resolve(parent)}${path.sep}`);
 }
 
 describe('Space bytes on a backend with no Space folder', () => {
@@ -117,5 +124,49 @@ describe('Space bytes on a backend with no Space folder', () => {
     // Sweeping the areas is the blob port's contract; removing the directory
     // composition put them under is this module's, and nothing else would.
     expect(existsSync(spaceRoot)).toBe(false);
+  });
+});
+
+/**
+ * The two Disk adapters share `storage/disk/`, so the line between them is a
+ * path fact and is tested as one.
+ *
+ * They are never both in use — the registry belongs to the Disk *structured*
+ * store and the byte roots appear only when some other backend holds the
+ * records — but one data directory can see both across a backend switch. The
+ * blob store deletes whole directories; the registry is not its to delete.
+ */
+describe('the Disk backend area in the data directory', () => {
+  const DATA_DIR = '/var/lib/huabu';
+
+  it('gives the registry and the byte roots separate subtrees', () => {
+    const registry = workspaceRegistryPath(DATA_DIR);
+    const blobs = diskBlobRoot(DATA_DIR);
+
+    expect(isInside(diskDataDir(DATA_DIR), registry)).toBe(true);
+    expect(isInside(diskDataDir(DATA_DIR), blobs)).toBe(true);
+    // The one that matters: no sweep of a Space's bytes, an area, or the whole
+    // blob root can reach the structured store's registry.
+    expect(isInside(blobs, registry)).toBe(false);
+    expect(isInside(blobs, diskSpaceBlobRoot('ws', 'canvas', DATA_DIR))).toBe(
+      true,
+    );
+  });
+
+  it('moves only the bytes when HUABU_BLOB_ROOT is set', () => {
+    const previous = process.env['HUABU_BLOB_ROOT'];
+    process.env['HUABU_BLOB_ROOT'] = '/mnt/bulk/huabu-bytes';
+    try {
+      expect(diskSpaceBlobRoot('ws', 'canvas', DATA_DIR)).toBe(
+        path.join('/mnt/bulk/huabu-bytes', 'ws', 'canvas'),
+      );
+      // The registry is the structured store's and does not follow.
+      expect(workspaceRegistryPath(DATA_DIR)).toBe(
+        path.join(diskDataDir(DATA_DIR), 'workspaces.json'),
+      );
+    } finally {
+      if (previous === undefined) delete process.env['HUABU_BLOB_ROOT'];
+      else process.env['HUABU_BLOB_ROOT'] = previous;
+    }
   });
 });

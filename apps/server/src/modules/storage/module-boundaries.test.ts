@@ -175,6 +175,26 @@ describe('storage dependency direction', () => {
     expect(violations).toEqual([]);
   });
 
+  /**
+   * Each backend owns its own area of the Server data directory.
+   *
+   * `storage/disk/` and `storage/sqlite/` are backend-shaped names, so the
+   * only files allowed to build them are those backends'. The composition root
+   * asks; it does not know. Two adapters share `storage/disk/` — the
+   * structured store's Workspace registry and the blob store's Space byte
+   * roots — and one file deciding both is what keeps them from overlapping.
+   */
+  it('lets each backend own its area of the data directory', () => {
+    const owners = sourceFiles
+      .filter((f) => !f.endsWith('.test.ts'))
+      .filter((f) => /'storage',\s*'(disk|sqlite)'/.test(read(f)));
+
+    expect(owners.sort()).toEqual([
+      'modules/storage/backends/disk/data-dir.ts',
+      'modules/storage/backends/sqlite/database.ts',
+    ]);
+  });
+
   it('selects a backend only in the composition root', () => {
     const importers = storageFiles
       // Tests construct adapters directly — that is how an adapter gets

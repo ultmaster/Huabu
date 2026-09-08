@@ -88,19 +88,25 @@ Key points:
 `HUABU_STRUCTURED_BACKEND=sqlite` selects the second implemented structured backend. The blob axis stays `disk`, because bytes are always files. It needs **no Workspace folder and no Space directories**: every record is a row, and the only directories are the ones a Space's bytes sit in.
 
 ```
-<HUABU_DATA_DIR>/
-  storage/sqlite/
+<HUABU_DATA_DIR>/storage/
+  sqlite/                         # the SQLite backend's area
     huabu.sqlite                  # every record; override with HUABU_SQLITE_PATH
     huabu.sqlite-wal              # WAL sidecars, managed by SQLite
     huabu.sqlite-shm
-  storage/blobs/                  # override with HUABU_BLOB_ROOT
-    <workspaceId>/
-      <canvasId>/
-        skill.md                  # blob area `guide`
-        .artifacts/               # blob area `artifacts`
-        .memory/space.md          # blob area `memory`
-        .upload/                  # blob area `uploads`
+  disk/                           # the Disk backend's area
+    workspaces.json               # Disk *structured* store: Workspace registry (unused here)
+    blobs/                        # Disk *blob* store; override with HUABU_BLOB_ROOT
+      <workspaceId>/
+        <canvasId>/
+          skill.md                # blob area `guide`
+          .artifacts/             # blob area `artifacts`
+          .memory/space.md        # blob area `memory`
+          .upload/                # blob area `uploads`
 ```
+
+Each directory under `storage/` is named for the backend that owns it, and one file per backend decides its layout: `backends/disk/data-dir.ts` and `backends/sqlite/database.ts`. The composition root asks them and builds no path of its own (`module-boundaries.test.ts` enforces that).
+
+`storage/disk/` has two owners, so they get separate subtrees. `workspaces.json` is the Disk _structured_ store's Workspace registry — present only on a Disk-structured deployment, and never inside `blobs/`, because the blob store deletes whole directories and the registry is not its to delete. `blobs/` is the Disk _blob_ store's, reached only when the structured backend gives a Space no folder; `HUABU_BLOB_ROOT` moves that subtree alone.
 
 The byte root is Server-owned, not a Workspace folder: nothing in it is a Space record, and the Disk-only capabilities below stay unavailable because they need a real Space tree, not merely a directory. The layout beneath `<canvasId>/` is byte-for-byte the one the Disk profile uses inside a Space folder, because it is the same adapter — composition only tells it where the Space's root is.
 
