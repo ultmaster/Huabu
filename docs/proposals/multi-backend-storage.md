@@ -2670,20 +2670,27 @@ same cascade as everything else.
 
 #### 12.9.4 What this profile does not serve
 
-Six capabilities are Disk-only, declared in `storage/capabilities.ts`, logged
-at startup, and refused at their own call sites in the same words:
+These capabilities are Disk-only, declared in `storage/capabilities.ts`,
+logged at startup, and refused at their own call sites in the same words.
 
-| Capability                                    | What is lost                                        | Why it is not emulated                                                                                                                                   |
-| --------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace-directory`                         | Choosing, creating, or revealing a Workspace folder | A Workspace is a row. The Server opens its own on first start; the client is told `canChangeWorkspace: false` and shows no picker.                       |
-| `space-bundle-export` / `space-bundle-import` | `.huabu.zip` round-trip                             | The bundle _is_ the Space directory, archived. A portable export built from records plus reachable blob references is a separate design.                 |
-| `reveal-space-folder`                         | "Show me this in Finder"                            | Without a folder there is nothing to show.                                                                                                               |
-| `builtin-file-tools`                          | The agent's `read`/`write`/`glob`/`grep` tools      | They sandbox on the Space directory. The first-party agent edits nodes through the Canvas tools instead.                                                 |
-| `space-file-plane`                            | RFS, the HTTP file plane external agents mount      | Listed apart from the tools above because it is what they were previously said to fall back to. A Space with no file plane has neither.                  |
-| `external-note-discovery`                     | Adopting Markdown dropped into a Space from outside | It watches for documents that arrived without going through the application. A database has no such arrival path.                                        |
-| `workspace-user-memory`                       | `setting/user.md`, the cross-Space memory document  | It is a file the user edits at the root of a Workspace they chose, and there is no such folder. A Space's _own_ memory body is a blob and is unaffected. |
-| `workspace-user-skills`                       | `setting/skills/<id>/SKILL.md`                      | Same arrival path as external notes. Bundled and Agent Team skills are unaffected.                                                                       |
-| `space-directory-handle-coordination`         | Windows rename-while-watched                        | No directory, no problem.                                                                                                                                |
+They are keyed on the **structured** backend, and the hybrid profile is what
+makes that worth stating: every one needs the Space's record and node
+documents to exist as files, and a real file system for the Space's _bytes_
+gives none of them back. Each refusal keys on `Space.diskTree` being `null`,
+which is a structured-backend fact — the byte directory is not a Space tree,
+and `detached-blobs.test.ts` pins that.
+
+| Capability                                    | What is lost                                        | Why it is not emulated                                                                                                                                                                       |
+| --------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace-directory`                         | Choosing, creating, or revealing a Workspace folder | A Workspace is a row. The Server opens its own on first start; the client is told `canChangeWorkspace: false` and shows no picker.                                                           |
+| `space-bundle-export` / `space-bundle-import` | `.huabu.zip` round-trip                             | The bundle _is_ the Space directory, archived. A portable export built from records plus reachable blob references is a separate design.                                                     |
+| `reveal-space-folder`                         | "Show me this in Finder"                            | What a user means by "this" is the Space — its record and node documents — and those are rows. Its byte directory is not the Space.                                                          |
+| `builtin-file-tools`                          | The agent's `read`/`write`/`glob`/`grep` tools      | The documents they edit are the node sidecars under `nodes/`, which are rows. The first-party agent uses the Canvas tools instead.                                                           |
+| `space-file-plane`                            | RFS, the HTTP file plane external agents mount      | Listed apart from the tools above because it is what they were previously said to fall back to. A Space with no file plane has neither.                                                      |
+| `external-note-discovery`                     | Adopting Markdown dropped into a Space from outside | It watches for documents that arrived without going through the application. A database has no such arrival path.                                                                            |
+| `workspace-user-memory`                       | `setting/user.md`, the cross-Space memory document  | A file the user edits at the root of a Workspace they chose. The blob port has no Workspace-level scope, so it has none to live in. A Space's _own_ memory body is a blob and is unaffected. |
+| `workspace-user-skills`                       | `setting/skills/<id>/SKILL.md`                      | Same arrival path as external notes. Bundled and Agent Team skills are unaffected.                                                                                                           |
+| `space-directory-handle-coordination`         | Windows rename-while-watched                        | Nothing renames a byte directory keyed by id, and with note discovery off nothing watches it. No handles to arbitrate.                                                                       |
 
 One further limit is not a capability row because nothing refuses it; it is
 simply a property of the backend:

@@ -132,6 +132,8 @@ Notes an operator needs:
 - **Bytes are outside the database.** The blob axis is a file system on every profile, so a Space's uploads, artifacts, guide and memory body are ordinary files under the byte root and the database stays the size of its records. Deletion order is the composition layer's saga — sweep every blob area, then drop the record — and, where the record is a row, composition also removes the `<workspaceId>/<canvasId>/` directory it placed those areas under, because nothing else would.
 - **What this profile does not serve** is declared in `capabilities.ts`, logged at startup, and refused in the same words at each call site: choosing/creating/revealing a Workspace folder, `.huabu.zip` export and import, reveal-in-file-manager, the built-in agent file tools, RFS's file plane, external-note discovery, the Workspace `setting/user.md` memory document, user-authored skills under `setting/skills/`, and Windows directory-handle coordination. A Space's _own_ memory body is unaffected — it is a blob. Bundled and Agent Team skills are unaffected.
 
+  These are keyed on the **structured** backend, not the blob one, and that survives the hybrid profile: every entry needs the Space's record and node documents to exist as files, so a real file system for its bytes gives none of them back. Each refusal keys on `Space.diskTree` being `null`, which stays `null` however many byte directories exist.
+
 ## 3. Storage composition and ownership
 
 `apps/server/src/modules/storage/` has three layers plus its composition root:

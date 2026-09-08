@@ -112,6 +112,20 @@ describe('Space bytes on a backend with no Space folder', () => {
     );
   });
 
+  it('is not a Space tree, so no Disk-only capability turns on', async () => {
+    await mount();
+    await createSpace(CANVAS_ID, 'Detached');
+    await space(CANVAS_ID).artifacts.put('art.bin', Buffer.from('bytes'));
+
+    // The byte directory exists and holds real files, and the Space still has
+    // no `diskTree`. That single `null` is what every Disk-only feature keys
+    // on — bundle export, reveal-in-file-manager, the built-in file tools,
+    // RFS, external-note claim — so it is the fact worth pinning: a file
+    // system for bytes is not a Space directory and grants none of them.
+    expect(existsSync(artifactsDirectory(CANVAS_ID))).toBe(true);
+    expect(space(CANVAS_ID).diskTree).toBeNull();
+  });
+
   it('leaves no directory behind when the Space is deleted', async () => {
     await mount();
     await createSpace(CANVAS_ID, 'Detached');

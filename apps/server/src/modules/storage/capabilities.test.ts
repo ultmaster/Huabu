@@ -57,6 +57,12 @@ describe('storage capability matrix', () => {
 
     // Every entry is Disk-only today, so a structured backend that is not
     // Disk loses all of them. The assertion is the shape, not the count.
+    //
+    // `TABLES` pairs SQLite records with Disk *bytes*, which is the profile
+    // this deployment actually runs, so this is also the answer to "does a
+    // real file system for bytes give any of these back". It does not: every
+    // entry needs the Space's record and node documents to be files, and
+    // those are rows whatever holds the bytes.
     expect(missing).toEqual(STORAGE_CAPABILITIES);
     expect(hasStorageCapability(TABLES, 'reveal-space-folder')).toBe(false);
     expect(hasStorageCapability(DISK, 'reveal-space-folder')).toBe(true);

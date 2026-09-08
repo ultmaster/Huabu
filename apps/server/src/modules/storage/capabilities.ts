@@ -84,25 +84,33 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
     summary: 'Reveal a Space in the OS file manager',
     backends: ['disk'],
     rationale:
-      'The feature is "show me this in Finder". Without a folder there is ' +
-      'nothing to show.',
+      'The feature is "show me this in Finder", and what a user means by ' +
+      '"this" is the Space: its record and its node documents. Those are ' +
+      'rows. The one directory such a Space has holds its opaque bytes and ' +
+      'is Server-owned, so revealing it would open something that is not the ' +
+      'thing that was asked for.',
   },
   {
     id: 'builtin-file-tools',
     summary: 'Built-in agent file tools (read, write, glob, grep)',
     backends: ['disk'],
     rationale:
-      'They sandbox on the Space directory. Off Disk the first-party agent ' +
-      'reads and writes nodes through the Canvas tools instead, which is ' +
-      'the portable surface it already prefers for structured edits.',
+      'They sandbox on the Space directory and the documents they exist to ' +
+      'edit are the node sidecars under `nodes/`, which are rows here. A ' +
+      "Space's byte areas are files on every profile, but they hold " +
+      'artifacts and uploads, not the documents an agent reads and writes. ' +
+      'Off Disk the first-party agent goes through the Canvas tools instead, ' +
+      'which is the portable surface it already prefers for structured edits.',
   },
   {
     id: 'space-file-plane',
     summary: 'Reach a Space as files over RFS, the plane external agents mount',
     backends: ['disk'],
     rationale:
-      'RFS projects the Space directory over HTTP — the same tree, reachable ' +
-      'from another machine. It is listed apart from the built-in file tools ' +
+      'RFS projects the Space directory over HTTP — the record and the node ' +
+      'sidecars, reachable from another machine. Those are rows here, and a ' +
+      'projection of the byte areas alone would be a different plane wearing ' +
+      "this one's name. It is listed apart from the built-in file tools " +
       'because it is what those tools were said to fall back to: a Space ' +
       'with no file plane has neither, and an external agent bound to a ' +
       'Space on this backend reaches it through the Canvas API.',
@@ -112,19 +120,21 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
     summary: 'Adopt Markdown files dropped into a Space from outside the app',
     backends: ['disk'],
     rationale:
-      'It watches for documents that arrived without going through the ' +
-      'application. A database backend has no such arrival path unless ' +
-      'someone writes to the store out of band, and inventing one would buy ' +
-      'nothing.',
+      'It watches `nodes/` for documents that arrived without going through ' +
+      'the application. That tier is rows here, and no byte area is a place ' +
+      'a user would drop a note into: they are hidden, Server-owned, and ' +
+      'hold artifacts. Inventing an arrival path would buy nothing.',
   },
   {
     id: 'workspace-directory',
     summary: 'Choose, create, or reveal a Workspace folder on this machine',
     backends: ['disk'],
     rationale:
-      'A Workspace is a folder the user picks. Where Workspaces are rows, ' +
+      'A Workspace is a folder the user picks. Where Workspaces are rows ' +
       'there is nothing to browse to: the Server opens its own on first ' +
-      'start and Workspaces are managed by name instead of by path.',
+      'start and Workspaces are created and managed by name instead of by ' +
+      'path. The per-Workspace directory under the blob root is Server-owned ' +
+      'storage for bytes, not a Workspace a user could choose or move.',
   },
   {
     id: 'workspace-user-memory',
@@ -132,9 +142,10 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
     backends: ['disk'],
     rationale:
       'A user-editable file at the Workspace root, deliberately outside any ' +
-      'Space so it applies to all of them. Every blob scope this port has is ' +
-      "scoped to a Space, so there is nowhere it belongs yet; a Space's own " +
-      'memory body is unaffected.',
+      'Space so it applies to all of them. The blob port has no ' +
+      'Workspace-level scope — every area it vends belongs to a Space — so ' +
+      'the document has no scope to live in, whatever directories happen to ' +
+      "exist. A Space's own memory body is unaffected; it is a blob.",
   },
   {
     id: 'workspace-user-skills',
@@ -150,8 +161,11 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
     summary: 'Windows: rename or delete a Space while a watcher holds it open',
     backends: ['disk'],
     rationale:
-      'Exists so a directory rename can succeed against a live `fs.watch` ' +
-      'handle. No directory, no problem.',
+      'Exists so renaming a Space *directory* can succeed against a live ' +
+      '`fs.watch` handle. A Space that is a row is never filed under its ' +
+      'title, so nothing renames its byte directory, and with external-note ' +
+      'discovery unavailable nothing watches it either. No rename and no ' +
+      'watcher, so there are no handles to arbitrate.',
   },
 ];
 
