@@ -86,17 +86,6 @@ CREATE TABLE delta_log (
   FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
 ) STRICT;
 
-CREATE TABLE blobs (
-  workspace_id TEXT NOT NULL,
-  canvas_id TEXT NOT NULL,
-  area TEXT NOT NULL,
-  name TEXT NOT NULL,
-  bytes BLOB NOT NULL,
-  size INTEGER NOT NULL,
-  updated_at REAL NOT NULL,
-  PRIMARY KEY (workspace_id, canvas_id, area, name)
-) STRICT;
-
 INSERT INTO workspaces (
   workspace_id, name, created_at, last_opened_at, forgotten_at
 ) VALUES ('fixture-workspace', 'Fixture Workspace', 1, 1, NULL);
@@ -142,13 +131,6 @@ INSERT INTO tasks (canvas_id, snapshot_json) VALUES (
 INSERT INTO delta_log (canvas_id, version, entry_json) VALUES (
   'fixture-space', 3,
   '{"version":3,"ts":13,"commands":[],"deltas":[],"originator":{"source":"system"}}'
-);
-
-INSERT INTO blobs (
-  workspace_id, canvas_id, area, name, bytes, size, updated_at
-) VALUES (
-  'fixture-workspace', 'fixture-space', 'artifacts', 'fixture.txt',
-  CAST('fixture bytes' AS BLOB), 13, 14
 );
 
 PRAGMA user_version = 1;

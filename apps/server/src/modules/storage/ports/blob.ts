@@ -28,8 +28,13 @@ import type { Readable } from 'node:stream';
  * Like {@link StructuredBackendKind}, this names only what exists. The wider
  * vocabulary a profile may *request* — including `azure`, which is a settled
  * direction with no adapter — belongs to `profile.ts`.
+ *
+ * Every member of that wider vocabulary is a **file system**: a local
+ * directory now, an object store later. Bytes are not records, and a
+ * structured backend is never asked to hold them — which is what lets a
+ * deployment pair SQL records with ordinary files (proposal §6.2).
  */
-export type BlobBackendKind = 'disk' | 'sqlite';
+export type BlobBackendKind = 'disk';
 
 /**
  * Every area of one Space that holds bytes.

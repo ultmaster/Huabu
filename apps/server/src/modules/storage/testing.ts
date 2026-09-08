@@ -36,12 +36,17 @@ import type { Storage } from './storage.js';
  */
 export const PRODUCT_STORAGE_PROFILES: readonly StorageProfile[] = [
   { structured: { kind: 'disk' }, blobs: { kind: 'disk' } },
-  { structured: { kind: 'sqlite' }, blobs: { kind: 'sqlite' } },
+  { structured: { kind: 'sqlite' }, blobs: { kind: 'disk' } },
 ];
 
 /** Readable name for a profile, for test titles. */
 export function describeProfile(profile: StorageProfile): string {
   return `${profile.structured.kind}/${profile.blobs.kind}`;
+}
+
+function restoreEnv(key: string, previous: string | undefined): void {
+  if (previous === undefined) delete process.env[key];
+  else process.env[key] = previous;
 }
 
 export interface MountedTestStorage {
@@ -51,9 +56,9 @@ export interface MountedTestStorage {
    * The temporary directory this mount owns.
    *
    * For a Disk profile it is the Workspace itself; for a profile that keeps
-   * Workspaces in a database it is only where the harness put that database.
-   * Either way it is the harness's own business — a case that reads it has
-   * stopped being evidence of anything portable.
+   * Workspaces in a database it is only where the harness put that database
+   * and the Space byte root. Either way it is the harness's own business — a
+   * case that reads it has stopped being evidence of anything portable.
    */
   readonly workspacePath: string;
   /**
@@ -85,6 +90,7 @@ export async function mountTestWorkspace(
   const safePrefix = prefix.replace(/[^a-zA-Z0-9._-]/g, '-');
   const workspacePath = mkdtempSync(path.join(tmpdir(), safePrefix));
   const previousSqlitePath = process.env['HUABU_SQLITE_PATH'];
+  const previousBlobRoot = process.env['HUABU_BLOB_ROOT'];
 
   if (profile.structured.kind === 'disk') {
     // Prepares and commits the Workspace, exactly as a synchronous activation
@@ -93,12 +99,13 @@ export async function mountTestWorkspace(
     // namespace selected inside it.
     setWorkspacePath(workspacePath);
   } else {
-    // Nothing to pick. The Workspace is a row the backend creates on first
-    // start, and `initStorage` activates it — which is exactly the behaviour
-    // that lets this profile run with no folder at all. The temp directory
-    // only gives this mount its own database file so parallel suites do not
-    // share one.
+    // No Workspace folder to pick. The Workspace is a row the backend creates
+    // on first start, and `initStorage` activates it — which is exactly the
+    // behaviour that lets this profile run without one. The temp directory
+    // only gives this mount its own database file and its own byte root, so
+    // parallel suites do not share either.
     process.env['HUABU_SQLITE_PATH'] = path.join(workspacePath, 'huabu.sqlite');
+    process.env['HUABU_BLOB_ROOT'] = path.join(workspacePath, 'blobs');
   }
 
   const storage = await initStorage(profile);
@@ -119,11 +126,8 @@ export async function mountTestWorkspace(
     },
     async close(): Promise<void> {
       await closeStorage();
-      if (previousSqlitePath === undefined) {
-        delete process.env['HUABU_SQLITE_PATH'];
-      } else {
-        process.env['HUABU_SQLITE_PATH'] = previousSqlitePath;
-      }
+      restoreEnv('HUABU_SQLITE_PATH', previousSqlitePath);
+      restoreEnv('HUABU_BLOB_ROOT', previousBlobRoot);
       rmSync(workspacePath, { recursive: true, force: true });
     },
   };

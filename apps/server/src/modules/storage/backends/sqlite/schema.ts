@@ -17,12 +17,10 @@
  * the same connection rather than reopening anything (proposal §2, "Backend
  * selection scope").
  *
- * Blobs deliberately do **not** reference `spaces`. The two ports are
- * configured independently and their lifecycles are joined only by the
- * deletion saga in `storage.ts`, which sweeps every blob area *before* the
- * structured record goes. A foreign key here would quietly move that ordering
- * decision into the schema, and would refuse the orphan sweep the saga
- * performs when a record has already gone missing.
+ * Nothing here holds bytes. Blobs are files on whichever file system the blob
+ * axis names, so a Space's uploads, artifacts, guide and memory body are never
+ * rows in this database; the two lifecycles are joined only by the deletion
+ * saga in `storage.ts`, which sweeps the byte areas before the record goes.
  */
 
 /**
@@ -113,17 +111,6 @@ const SCHEMA_V1 = `
     entry_json TEXT NOT NULL CHECK (json_valid(entry_json)),
     PRIMARY KEY (canvas_id, version),
     FOREIGN KEY (canvas_id) REFERENCES spaces(canvas_id) ON DELETE CASCADE
-  ) STRICT;
-
-  CREATE TABLE blobs (
-    workspace_id TEXT NOT NULL,
-    canvas_id TEXT NOT NULL,
-    area TEXT NOT NULL,
-    name TEXT NOT NULL,
-    bytes BLOB NOT NULL,
-    size INTEGER NOT NULL,
-    updated_at REAL NOT NULL,
-    PRIMARY KEY (workspace_id, canvas_id, area, name)
   ) STRICT;
 `;
 

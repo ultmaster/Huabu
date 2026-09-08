@@ -25,7 +25,7 @@ import type {
 /**
  * Structured-store adapter over one `node:sqlite` connection.
  *
- * The connection may be shared with the SQLite blob store — one database file
+ * The connection is shared with the Workspace repository — one database file
  * cannot have two writers — so this class does not assume it owns the
  * lifecycle. Constructed with a filename it opens and closes its own
  * connection; constructed with an existing context it borrows one, and

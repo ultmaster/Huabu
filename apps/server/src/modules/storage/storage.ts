@@ -23,12 +23,15 @@
  * through it.
  */
 
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { getDataDir } from '../../data-dir.js';
+import { sanitizeId } from '../../utils/fs.js';
 import {
   acquireWorkspaceOperationLease,
   commitWorkspaceIdentity,
+  getWorkspaceHandle,
   getWorkspaceKey,
 } from '../workspace.js';
 import { DiskBlobStore } from './backends/disk/blob-store.js';
@@ -40,7 +43,6 @@ import {
   DiskWorkspaceRepository,
   workspaceRegistryPath,
 } from './backends/disk/workspace-repository.js';
-import { SqliteBlobStore } from './backends/sqlite/blob-store.js';
 import { SqliteStoreContext } from './backends/sqlite/database.js';
 import { SqliteStructuredStore } from './backends/sqlite/structured-store.js';
 import { SqliteWorkspaceRepository } from './backends/sqlite/workspace-repository.js';
@@ -112,16 +114,52 @@ function assertActiveWorkspace(workspaceKey: string, canvasId: string): void {
 }
 
 /**
- * Where the SQLite profile keeps everything it has.
+ * Where the SQLite profile keeps its records.
  *
  * One file, beside the Disk backend's own registry in the data directory, so
  * an operator can find both in the same place. `HUABU_SQLITE_PATH` overrides
- * it for deployments that keep their database elsewhere.
+ * it for deployments that keep their database elsewhere. A Space's *bytes* are
+ * not in it — see {@link detachedBlobRoot}.
  */
 export function sqliteDatabasePath(dataDir: string = getDataDir()): string {
   const configured = process.env['HUABU_SQLITE_PATH']?.trim();
   if (configured) return configured;
   return path.join(dataDir, 'storage', 'sqlite', 'huabu.sqlite');
+}
+
+/**
+ * Where a Space keeps its bytes when the structured backend has no folder for
+ * it.
+ *
+ * Blobs are always files (`ports/blob.ts`), so a profile whose records are
+ * rows still needs somewhere on a file system to put uploads, artifacts, the
+ * guide document and the memory body. The Server owns that directory rather
+ * than the user: it is not a Workspace folder, nothing in it is a Space
+ * record, and none of the Disk-only features that need a real Space tree
+ * become available because it exists.
+ *
+ * Scoped by Workspace first, because a Space belongs to exactly one and its
+ * bytes should travel and be removed with it. `HUABU_BLOB_ROOT` overrides the
+ * base for deployments that keep bytes on a different volume.
+ */
+export function detachedBlobRoot(dataDir: string = getDataDir()): string {
+  const configured = process.env['HUABU_BLOB_ROOT']?.trim();
+  return configured ? configured : path.join(dataDir, 'storage', 'blobs');
+}
+
+function detachedSpaceRoot(canvasId: string): string {
+  const workspace = getWorkspaceHandle();
+  if (!workspace) {
+    throw new Error(
+      `Blob scope for Space "${canvasId}" needs an active Workspace. ` +
+        'Activate one before reading or writing bytes.',
+    );
+  }
+  return path.join(
+    detachedBlobRoot(),
+    sanitizeId(workspace.workspaceId, 'workspaceId'),
+    sanitizeId(canvasId, 'canvasId'),
+  );
 }
 
 /**
@@ -244,16 +282,23 @@ function composeSpace(storage: Storage, canvasId: string): Space {
   };
 }
 
+/**
+ * The blob connection for this profile.
+ *
+ * One adapter, two placements. Where Disk also keeps the records, a Space's
+ * bytes stay inside the Space folder — byte-for-byte the layout every existing
+ * Workspace has. Where the records are rows, the same adapter writes the same
+ * layout under a Server-owned root instead, which is what makes a hybrid
+ * profile (SQL records, ordinary files) an ordinary deployment.
+ */
 function buildBlobStore(profile: StorageProfile): BlobStore {
-  switch (profile.blobs.kind) {
-    case 'disk':
-      return new DiskBlobStore();
-    case 'sqlite':
-      return new SqliteBlobStore(sqliteConnection());
-    default:
-      // Unreachable: validateStorageProfile rejects unimplemented kinds.
-      throw new Error(`Unsupported blob backend: ${profile.blobs.kind}`);
+  if (profile.blobs.kind !== 'disk') {
+    // Unreachable: validateStorageProfile rejects unimplemented kinds.
+    throw new Error(`Unsupported blob backend: ${profile.blobs.kind}`);
   }
+  return profile.structured.kind === 'disk'
+    ? new DiskBlobStore()
+    : new DiskBlobStore(detachedSpaceRoot);
 }
 
 function buildStructuredStore(profile: StorageProfile): StructuredStore {
@@ -319,9 +364,9 @@ let spaceCreateTail: Promise<void> = Promise.resolve();
  * The one SQLite connection this process holds, opened on first need.
  *
  * Opening it is synchronous, which is why the on-demand path stays legal for
- * this profile: there is no `await` to skip. Both storage axes and the
- * Workspace repository borrow it, because they are one database file and a
- * second connection would be a second writer.
+ * this profile: there is no `await` to skip. The structured store and the
+ * Workspace repository both borrow it, because they are one database file and
+ * a second connection would be a second writer.
  */
 function sqliteConnection(): SqliteStoreContext {
   if (sqlite) return sqlite;
@@ -428,6 +473,32 @@ export function adoptWorkspaceDirectory(
   workspacePath: string,
 ): WorkspaceHandle {
   return materializedWorkspaces().adopt(workspacePath);
+}
+
+/**
+ * Create a Workspace that has no directory.
+ *
+ * The counterpart to {@link adoptWorkspaceDirectory} for a backend where a
+ * Workspace is a row: nothing to adopt, so a name is the whole of it. It is
+ * not a port member for the same reason locating a Workspace is not — Disk
+ * could only serve it by inventing a folder the user never picked, and the
+ * point of the port is that it says nothing about where a Workspace is.
+ *
+ * A deployment that keeps Workspaces in a database needs this to hold more
+ * than the one the Server opens for itself, which is the whole of multi-
+ * Workspace support there: every other operation — list, activate, rename,
+ * forget — is already on the port.
+ */
+export function createNamedWorkspace(name: string): Promise<WorkspaceHandle> {
+  const repository = getWorkspaceRepository();
+  if (!(repository instanceof SqliteWorkspaceRepository)) {
+    throw new StorageProfileError(
+      `The "${activeProfile().structured.kind}" structured backend keeps ` +
+        'Workspaces as directories, so a Workspace is created by adopting a ' +
+        'folder rather than by name.',
+    );
+  }
+  return repository.create(name);
 }
 
 /** The registered Workspace materialized at a directory, if there is one. */
@@ -680,6 +751,16 @@ export async function deleteSpace(
           area.deleteAll(),
         ),
       );
+      // Where the record is a row, nothing else will ever remove the
+      // directory those areas sat in. Sweeping the areas is the port's
+      // contract; removing what composition placed them under is this
+      // module's, and it is what stops a deleted Space leaving a husk behind.
+      if (storage.profile.structured.kind !== 'disk') {
+        await rm(detachedSpaceRoot(canvasId), {
+          recursive: true,
+          force: true,
+        });
+      }
       return await started.session.finish();
     } catch (error) {
       await started.session.abort();

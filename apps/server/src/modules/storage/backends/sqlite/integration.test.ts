@@ -1,14 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { extractCanvasChanges } from '@huabu/shared/canvas-engine';
 
-import { SqliteBlobStore } from './blob-store.js';
 import {
   applySqliteMigrations,
   SqliteStoreContext,
@@ -177,7 +175,6 @@ describe('SqliteStructuredStore lifecycle and schema', () => {
         user_version: SQLITE_SCHEMA_VERSION,
       });
       const expectedTables = [
-        'blobs',
         'changes',
         'delta_log',
         'events',
@@ -227,12 +224,6 @@ describe('SqliteStructuredStore lifecycle and schema', () => {
         to: 'workspace_id',
         onDelete: 'CASCADE',
       });
-      // Blob rows deliberately do not reference `spaces`: the deletion saga
-      // sweeps them before the record goes, and must also be able to sweep
-      // orphans for a record that is already missing.
-      expect(database.prepare('PRAGMA foreign_key_list(blobs)').all()).toEqual(
-        [],
-      );
     });
   });
 
@@ -295,13 +286,6 @@ describe('SqliteStructuredStore lifecycle and schema', () => {
         originator: { source: 'system' },
       },
     ]);
-    const blobs = new SqliteBlobStore(
-      // The same connection the structured store just read through.
-      (store as unknown as { context: SqliteStoreContext }).context,
-    );
-    await expect(
-      blobs.space('fixture-space').artifacts.read('fixture.txt'),
-    ).resolves.toEqual(Buffer.from('fixture bytes'));
   });
 
   it('rejects a database whose user_version is from the future', async () => {
@@ -908,62 +892,5 @@ describe('SqliteStructuredStore durability and encoding', () => {
           .all('forgotten-space'),
       ),
     ).toHaveLength(1);
-  });
-});
-
-describe('SqliteBlobStore', () => {
-  async function openBlobs(prefix: string) {
-    const harness = await trackedOpenStore(prefix);
-    const store = new SqliteBlobStore(harness.context);
-    await store.init();
-    return { harness, store };
-  }
-
-  it('keeps bytes exactly, including binary that is not text', async () => {
-    const { store } = await openBlobs('huabu-sqlite-blob-bytes-');
-    const bytes = Buffer.from([0, 1, 2, 250, 251, 252, 0, 255]);
-
-    const scope = store.space('blob-space').artifacts;
-    const info = await scope.put('binary.bin', bytes);
-    expect(info.size).toBe(bytes.byteLength);
-    expect(await scope.read('binary.bin')).toEqual(bytes);
-  });
-
-  it('spools a lease to a real path and removes it on release', async () => {
-    const { store } = await openBlobs('huabu-sqlite-blob-lease-');
-    const scope = store.space('blob-space').artifacts;
-    await scope.put('leased.png', Buffer.from('pretend png'));
-
-    const lease = await scope.materialize('leased.png');
-    if (!lease) throw new Error('Expected a lease');
-    const leasedPath = lease.path;
-    // The blob keeps its own name, so a consumer that infers a type from the
-    // extension still works.
-    expect(path.basename(leasedPath)).toBe('leased.png');
-    expect(readFileSync(leasedPath)).toEqual(Buffer.from('pretend png'));
-
-    await lease.release();
-    // A temp copy, not the storage: it must not survive the lease.
-    expect(existsSync(leasedPath)).toBe(false);
-    expect(await scope.read('leased.png')).toEqual(Buffer.from('pretend png'));
-  });
-
-  it('separates the bytes of one Workspace from another', async () => {
-    const { harness, store } = await openBlobs('huabu-sqlite-blob-workspace-');
-    const first = store.space('shared-canvas-id').artifacts;
-    await first.put('same-name.bin', Buffer.from('first workspace'));
-
-    const workspaces = new SqliteWorkspaceRepository(harness.context);
-    const second = await workspaces.create('Second Workspace');
-    harness.context.useWorkspace(second.workspaceId);
-
-    const other = store.space('shared-canvas-id').artifacts;
-    expect(await other.head('same-name.bin')).toBeNull();
-    await other.put('same-name.bin', Buffer.from('second workspace'));
-
-    harness.context.useWorkspace(harness.workspaceId);
-    expect(
-      await store.space('shared-canvas-id').artifacts.read('same-name.bin'),
-    ).toEqual(Buffer.from('first workspace'));
   });
 });

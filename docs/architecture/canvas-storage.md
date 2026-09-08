@@ -74,7 +74,7 @@ Key points:
 - Canonical World preview identity is server-owned: non-system commands cannot create, repoint, or delete managed previews. Users may move and resize them. Ordinary Spaces may create and delete their own `spacePreview` nodes through normal UI commands.
 - Legacy `canvasRef`, `frameRef`, `nodeRef`, `SET_PORTAL_NODE_PINS`, and `GET /api/canvas/:worldCanvasId/references` remain compatibility surfaces for stored World data but are no longer created or exposed by the redesigned World UI. The current model is specified in [space-preview.md](./space-preview.md).
 - Node filenames are `safe(label).md`; the node's stable id lives in the `id:` frontmatter field.
-- The Disk `BlobStore` maps each Space scope to `.artifacts/`, with blobs named `<artifactId><ext>` and no manifest file — the filename is the URL key. Artifacts are one of four blob areas a Space has, resolved as `space(canvasId).artifacts`: `put()` requires an existing Space record, while reads and `deleteAll()` remain available for recovery after a record goes missing. `CanvasStore` owns no artifact methods. Disk and SQLite are both implemented and selectable; `blobs=sqlite` requires `structured=sqlite`, because those bytes are rows in that same database.
+- The Disk `BlobStore` maps each Space scope to `.artifacts/`, with blobs named `<artifactId><ext>` and no manifest file — the filename is the URL key. Artifacts are one of four blob areas a Space has, resolved as `space(canvasId).artifacts`: `put()` requires an existing Space record, while reads and `deleteAll()` remain available for recovery after a record goes missing. `CanvasStore` owns no artifact methods. Blobs are always files: `disk` is the only implemented backend and `azure` the settled next one, so no structured backend is ever asked to hold bytes and any structured backend pairs with any blob backend.
 - Remote PDF preprocessing writes the already-fetched source bytes into the Space BlobStore as `artifact-<id>.pdf` before structured persistence and replaces the node's remote `src` with that key. As with other artifact imports, this blob write precedes the node write operation; a later structured persistence failure may therefore leave an unreferenced blob until Space deletion, while a blob-write failure degrades to retaining the remote URL.
 - Events are append-only JSONL (`events.jsonl`); each line is `{ ts: number, payload: RecentAction }`.
 - The memory analyzer reads Space existence and at most 100 recent action events through one `SpaceHandle`. A missing Space skips the pass before reading memory files or calling the model; corrupt part data still fails the pass. Memory body/state files remain materialized workspace paths, while Agenetes-owned chat history is not part of the curator bundle.
@@ -83,17 +83,26 @@ Key points:
 - Canonical Task and Run records live in `.history/tasks.json`, owned by Huabu Server through the async `SpaceTasks` ledger (`read`, `create`, and `runs.create`/`runs.update`/`runs.complete`). The Disk adapter validates the versioned snapshot and referential integrity on every read, rejects duplicate identifiers and Runs whose Task is absent, serializes read-modify-write operations with an independent per-Canvas process-local mutex, and atomically replaces the file. This mutex is intentionally separate from the Canvas topology write coordinator, so Task metadata does not participate in `space.json` version CAS.
 - Legacy chat files are one-way migrated into `chat_v2/` at workspace activation and retired to `.bak`: the oldest pi-ai `Context` `chat/<threadId>.json` via `migrate-chat-threads.ts` (hop 1), then the M5.6 `chat/<threadId>.turns.jsonl` / `.active.json` via `migrate-chat-turns.ts` (hop 2). If hop 1 finds both formats after an interrupted launch, it completes a strict converted prefix atomically or preserves an existing tail when the full conversion is its prefix. Divergent logs are retained rather than guessed or overwritten; hop 2 skips the paired turn log while a valid same-thread legacy Context remains or its JSON cannot be read safely, so a later activation can retry both copies without blocking unrelated migrations. The obsolete `CanvasStore` chat methods and `chatPath()` helper were removed in Phase 2; `chatDir()` remains because change-review and agent-owned files still use that directory.
 
-## 2b. SQLite layout — the profile with no folders
+## 2b. SQLite layout — records in a database, bytes in files
 
-`HUABU_STRUCTURED_BACKEND=sqlite HUABU_BLOB_BACKEND=sqlite` selects the second implemented profile. It needs **no Workspace folder and no Space directories**: every durable thing is a row in one file.
+`HUABU_STRUCTURED_BACKEND=sqlite` selects the second implemented structured backend. The blob axis stays `disk`, because bytes are always files. It needs **no Workspace folder and no Space directories**: every record is a row, and the only directories are the ones a Space's bytes sit in.
 
 ```
 <HUABU_DATA_DIR>/
   storage/sqlite/
-    huabu.sqlite                  # everything below; override with HUABU_SQLITE_PATH
+    huabu.sqlite                  # every record; override with HUABU_SQLITE_PATH
     huabu.sqlite-wal              # WAL sidecars, managed by SQLite
     huabu.sqlite-shm
+  storage/blobs/                  # override with HUABU_BLOB_ROOT
+    <workspaceId>/
+      <canvasId>/
+        skill.md                  # blob area `guide`
+        .artifacts/               # blob area `artifacts`
+        .memory/space.md          # blob area `memory`
+        .upload/                  # blob area `uploads`
 ```
+
+The byte root is Server-owned, not a Workspace folder: nothing in it is a Space record, and the Disk-only capabilities below stay unavailable because they need a real Space tree, not merely a directory. The layout beneath `<canvasId>/` is byte-for-byte the one the Disk profile uses inside a Space folder, because it is the same adapter — composition only tells it where the Space's root is.
 
 | Table              | Holds                                                                                                                                    |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -105,16 +114,14 @@ Key points:
 | `tasks`            | The versioned Task/Run snapshot                                                                                                          |
 | `delta_log`        | The executor's private journal, keyed by committed Space version                                                                         |
 | `space_extensions` | One row per extension namespace — the parent an owner's own tables cascade from                                                          |
-| `blobs`            | Artifact, guide, memory, and upload bytes, keyed by `(workspace, canvas, area, name)`                                                    |
 
 Owner-created tables hanging off `space_extensions`: `extension_documents` (memory bookkeeping and the debug prompt log) and `agenetes_threads` / `agenetes_events` / `agenetes_turns` (the conversation stores). Storage never reads them; deleting a Space removes them by cascade.
 
 Notes an operator needs:
 
 - **A Workspace is a row.** There is no folder to pick, so the Server creates and activates one on first start and reports `path: null` with `canChangeWorkspace: false`; the client shows no picker. Switching Workspaces re-scopes the one connection and reopens nothing.
-- **The connection is shared.** The structured store, the blob store, and the Workspace repository use one `node:sqlite` connection, opened in WAL with `synchronous = NORMAL`, a bounded `busy_timeout`, and foreign keys enforced. One process, one connection: nothing here promises a multi-process fence.
-- **Blob bytes are rows**, read and written whole. The profile is sized for the documents and images a Space holds, not arbitrarily large media, and the database grows to the size of everything ever uploaded. `materialize()` spools to the OS temp directory and unlinks on release.
-- **`blobs` has no foreign key to `spaces`.** Deletion order is the composition layer's saga — sweep every blob area, then drop the record — and that saga must also be able to sweep orphans for a record that is already missing.
+- **The connection is shared.** The structured store and the Workspace repository use one `node:sqlite` connection, opened in WAL with `synchronous = NORMAL`, a bounded `busy_timeout`, and foreign keys enforced. One process, one connection: nothing here promises a multi-process fence.
+- **Bytes are outside the database.** The blob axis is a file system on every profile, so a Space's uploads, artifacts, guide and memory body are ordinary files under the byte root and the database stays the size of its records. Deletion order is the composition layer's saga — sweep every blob area, then drop the record — and, where the record is a row, composition also removes the `<workspaceId>/<canvasId>/` directory it placed those areas under, because nothing else would.
 - **What this profile does not serve** is declared in `capabilities.ts`, logged at startup, and refused in the same words at each call site: choosing/creating/revealing a Workspace folder, `.huabu.zip` export and import, reveal-in-file-manager, the built-in agent file tools, RFS's file plane, external-note discovery, the Workspace `setting/user.md` memory document, user-authored skills under `setting/skills/`, and Windows directory-handle coordination. A Space's _own_ memory body is unaffected — it is a blob. Bundled and Agent Team skills are unaffected.
 
 ## 3. Storage composition and ownership

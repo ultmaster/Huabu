@@ -23,6 +23,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 vi.mock('../../../workspace.js', () => ({
   getWorkspacePath: () => testState.workspacePath,
+  getWorkspaceKey: () => testState.workspacePath,
 }));
 
 function errno(code: string): NodeJS.ErrnoException {

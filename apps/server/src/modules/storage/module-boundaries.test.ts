@@ -87,6 +87,7 @@ describe('storage module tree', () => {
       'canvas-dirs.ts',
       'capabilities.test.ts',
       'capabilities.ts',
+      'detached-blobs.test.ts',
       'index.ts',
       'module-boundaries.test.ts',
       'paths.ts',

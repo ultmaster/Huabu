@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-import { SqliteBlobStore } from './blob-store.js';
 import { SqliteStoreContext } from './database.js';
 import {
   createSqliteTestFile,
@@ -11,7 +10,6 @@ import {
   readSqliteDeltaLog,
 } from './test-support.js';
 import { SqliteWorkspaceRepository } from './workspace-repository.js';
-import { describeBlobStoreContract } from '../../ports/contracts/blob-store.contract.js';
 import { describeSpaceExtensionContract } from '../../ports/contracts/space-extension.contract.js';
 import { describeSpaceLogsContract } from '../../ports/contracts/space-logs.contract.js';
 import { describeSpaceNodesContract } from '../../ports/contracts/space-nodes.contract.js';
@@ -201,17 +199,6 @@ describeSpaceTasksContract('SQLite', async () => {
       if (!result.ok) throw new Error('Ordinary Space must be deletable');
       return result.session;
     },
-    cleanup: harness.cleanup,
-  };
-});
-
-describeBlobStoreContract('SqliteBlobStore', async () => {
-  const harness = await openEmptySqliteTestStore('huabu-sqlite-blob-contract-');
-  return {
-    // The blob store shares the structured store's connection, because both
-    // ports are one database file.
-    store: new SqliteBlobStore(harness.context),
-    canvasId: 'sqlite-blob-contract-space',
     cleanup: harness.cleanup,
   };
 });

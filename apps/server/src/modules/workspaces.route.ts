@@ -12,12 +12,12 @@ import { resetPreprocessDispatcher } from './preprocessing/index.js';
 import {
   activateWorkspace,
   adoptWorkspaceDirectory,
+  createNamedWorkspace,
   ensureWorkspaceManifestOnDisk,
   getWorkspaceRepository,
   hasWorkspaceRegistry,
   materializesWorkspaces,
   resetStorageCache,
-  unavailableCapabilityMessage,
   workspaceAtDirectory,
   workspaceDirectory,
   workspaceIdentityOnDisk,
@@ -226,17 +226,6 @@ const workspacesRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Body: WorkspaceCreateRequest }>('/', async (request, reply) => {
     const rejected = rejectReadOnlyMutation(request, reply);
     if (rejected) return rejected;
-    if (!materializesWorkspaces()) {
-      // Creating a Workspace here means adopting a folder. Where Workspaces
-      // are rows the Server opens its own, and adding more of them is a
-      // by-name operation this API does not have yet.
-      return sendError(
-        reply,
-        409,
-        unavailableCapabilityMessage('workspace-directory'),
-        'STORAGE_CAPABILITY_UNAVAILABLE',
-      );
-    }
 
     const parsed = workspaceCreateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -247,8 +236,31 @@ const workspacesRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
+    // A Workspace that is a row is created by name: there is no folder to
+    // adopt, prepare, or fork a child process for. The deployment still holds
+    // as many Workspaces as it likes — this is the only one of the collection
+    // operations the folder API could not already express.
+    if (!materializesWorkspaces()) {
+      const name = parsed.data.name;
+      if (!name) {
+        return sendError(reply, 400, 'Workspace name is required');
+      }
+      try {
+        return reply
+          .status(201)
+          .send(descriptor(await createNamedWorkspace(name)));
+      } catch (error) {
+        return sendPreparationError(reply, error);
+      }
+    }
+
+    const requestedPath = parsed.data.path;
+    if (!requestedPath) {
+      return sendError(reply, 400, 'Workspace path is required');
+    }
+
     try {
-      const workspacePath = resolveWorkspacePath(parsed.data.path);
+      const workspacePath = resolveWorkspacePath(requestedPath);
       const repository = getWorkspaceRepository();
       const existing = workspaceAtDirectory(workspacePath);
       if (existing) {

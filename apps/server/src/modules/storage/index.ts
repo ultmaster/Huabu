@@ -82,6 +82,7 @@ export {
   adoptWorkspaceDirectory,
   closeStorage,
   composeStorage,
+  createNamedWorkspace,
   createSpace,
   createStorage,
   deleteSpace,

@@ -6,8 +6,10 @@
  *
  * Structured and blob storage are independent configuration axes — the
  * settled direction of docs/proposals/multi-backend-storage.md §6.3. A
- * profile names one backend on each axis; not every pairing is a valid
- * deployment, so profiles are validated before any connection is opened.
+ * profile names one backend on each axis and every pairing of implemented
+ * backends is a valid deployment, because the axes share nothing: records go
+ * to the structured backend, bytes go to a file system. `sqlite` records with
+ * `disk` bytes is an ordinary profile, not a special case.
  */
 
 /**
@@ -26,41 +28,40 @@ export type RequestedStructuredKind = 'disk' | 'sqlite' | 'postgres';
  *
  * Wider than the port's {@link BlobBackendKind} for the same reason
  * {@link RequestedStructuredKind} is wider than the structured one.
+ *
+ * Every member is a file system. Bytes are files wherever they live — a local
+ * directory today, an object store later — and never rows in the structured
+ * database, so the two axes stay genuinely independent and a deployment may
+ * pair SQL records with ordinary files.
  */
-export type RequestedBlobKind = 'disk' | 'sqlite' | 'azure';
+export type RequestedBlobKind = 'disk' | 'azure';
 
 export interface StorageProfile {
   structured: { kind: RequestedStructuredKind };
   blobs: { kind: RequestedBlobKind };
 }
 
-/** Backends with an adapter implementation, selectable or otherwise. */
+/**
+ * Backends with an adapter, and therefore selectable.
+ *
+ * Selectable is not "identical to Disk". A profile may offer fewer features,
+ * as long as every one it does not offer is declared in `capabilities.ts` and
+ * refused where a user would reach for it. What disqualifies a backend is an
+ * *undeclared* gap — a feature that would fail with a stack trace rather than
+ * a sentence.
+ */
 const AVAILABLE_STRUCTURED: readonly RequestedStructuredKind[] = [
   'disk',
   'sqlite',
 ];
-
-/**
- * Backends whose capability matrix is complete enough to select.
- *
- * "Complete enough" is not "identical to Disk". A selectable profile may offer
- * fewer features, as long as every one it does not offer is declared in
- * `capabilities.ts` and refused where a user would reach for it. What
- * disqualifies a backend is an *undeclared* gap — a feature that would fail
- * with a stack trace rather than a sentence.
- */
-const SELECTABLE_STRUCTURED: readonly RequestedStructuredKind[] = [
-  'disk',
-  'sqlite',
-];
-const AVAILABLE_BLOBS: readonly RequestedBlobKind[] = ['disk', 'sqlite'];
+const AVAILABLE_BLOBS: readonly RequestedBlobKind[] = ['disk'];
 
 const STRUCTURED_KINDS: readonly RequestedStructuredKind[] = [
   'disk',
   'sqlite',
   'postgres',
 ];
-const BLOB_KINDS: readonly RequestedBlobKind[] = ['disk', 'sqlite', 'azure'];
+const BLOB_KINDS: readonly RequestedBlobKind[] = ['disk', 'azure'];
 
 export class StorageProfileError extends Error {
   override name = 'StorageProfileError';
@@ -125,49 +126,30 @@ export function validateStorageProfile(profile: StorageProfile): void {
         `Adapters available: ${AVAILABLE_STRUCTURED.join(', ')}.`,
     );
   }
-  if (!SELECTABLE_STRUCTURED.includes(profile.structured.kind)) {
-    throw new StorageProfileError(
-      `Structured backend "${profile.structured.kind}" has a preview adapter ` +
-        `but is not selectable yet. Required application capabilities still ` +
-        `depend on Disk. Selectable: ${SELECTABLE_STRUCTURED.join(', ')}.`,
-    );
-  }
   if (!AVAILABLE_BLOBS.includes(profile.blobs.kind)) {
     throw new StorageProfileError(
       `Blob backend "${profile.blobs.kind}" is not implemented yet. ` +
         `Available: ${AVAILABLE_BLOBS.join(', ')}.`,
     );
   }
-  // The first real cross-axis rule. SQLite blobs are rows in the structured
-  // database, so they have nowhere to live unless that database exists — the
-  // two axes stay independent in the port design, but this particular pairing
-  // is a single file, and saying so here beats failing at the first upload.
-  if (profile.blobs.kind === 'sqlite' && profile.structured.kind !== 'sqlite') {
-    throw new StorageProfileError(
-      `Blob backend "sqlite" stores bytes in the SQLite structured database, ` +
-        `so it requires HUABU_STRUCTURED_BACKEND=sqlite (got ` +
-        `"${profile.structured.kind}").`,
-    );
-  }
 }
 
 /**
- * Backends whose `init()` has nothing to open, so building them on demand is
- * safe.
+ * Structured backends whose `init()` has nothing to open, so building them on
+ * demand is safe.
  *
  * The lazy accessor in `storage.ts` is synchronous and therefore cannot
- * `await init()`. That is harmless for backends which have no connection to
- * establish, and silently wrong for any that do — they would be handed to
+ * `await init()`. That is harmless for a backend which has no connection to
+ * establish, and silently wrong for any that does — it would be handed to
  * callers unopened. Keeping the list here, next to the other backend facts,
  * means adding an adapter forces a decision about it.
+ *
+ * Only the structured axis appears: every blob backend is a file system, and
+ * a file system has no connection to open.
  */
 const LAZY_SAFE_STRUCTURED: readonly RequestedStructuredKind[] = ['disk'];
-const LAZY_SAFE_BLOBS: readonly RequestedBlobKind[] = ['disk'];
 
 /** Whether this profile may only be built through an awaited `initStorage()`. */
 export function requiresExplicitInit(profile: StorageProfile): boolean {
-  return (
-    !LAZY_SAFE_STRUCTURED.includes(profile.structured.kind) ||
-    !LAZY_SAFE_BLOBS.includes(profile.blobs.kind)
-  );
+  return !LAZY_SAFE_STRUCTURED.includes(profile.structured.kind);
 }

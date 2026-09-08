@@ -27,10 +27,10 @@ const DISK: StorageProfile = {
   blobs: { kind: 'disk' },
 };
 
-/** The profile that keeps Spaces in tables and bytes in rows. */
+/** The profile that keeps Spaces in tables and their bytes in files. */
 const TABLES: StorageProfile = {
   structured: { kind: 'sqlite' },
-  blobs: { kind: 'sqlite' },
+  blobs: { kind: 'disk' },
 };
 
 describe('storage capability matrix', () => {

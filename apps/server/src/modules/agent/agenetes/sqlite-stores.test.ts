@@ -30,7 +30,7 @@ import type { AgentStateSnapshot, WorkloadSpec } from '@agenetes/protocol';
 
 const SQLITE: StorageProfile = {
   structured: { kind: 'sqlite' },
-  blobs: { kind: 'sqlite' },
+  blobs: { kind: 'disk' },
 };
 
 const CANVAS_ID = 'canvas-conversation';
