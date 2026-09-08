@@ -1616,15 +1616,16 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     if (!(await handle.read())) {
       return reply.code(404).send({ message: 'Canvas not found' });
     }
-    // Disk-only, declared as `reveal-space-folder`: the feature *is* "show me
-    // this in Finder", so a backend without a folder has nothing to show.
+    // Declared as `reveal-space-folder`: what this opens is the `nodes/`
+    // folder, and off Disk a node is a row, so there is no folder of node
+    // documents to open and no hand-editable collision to resolve in one.
+    // The matrix decides and `diskTree` only supplies the path — asking
+    // `diskTree` directly would re-derive the requirement here.
+    //
     // A profile that cannot serve the feature and a Space whose folder is
     // missing are different problems with different remedies, so they get
     // different answers — the first repeats the matrix sentence the operator
     // read when they chose the profile.
-    // The matrix decides, and `diskTree` only supplies the path. Asking it
-    // directly would re-derive the requirement, and this one already spans
-    // both axes: a bundle needs the Space's bytes in the folder it archives.
     const tree = storageServes('reveal-space-folder') ? handle.diskTree : null;
     if (!tree) {
       return reply.code(400).send({
@@ -1667,13 +1668,13 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(404).send({ message: 'Canvas not found' });
     }
 
-    // Disk-only, declared as `space-bundle-export` in the capability matrix;
-    // a portable export generated from records plus reachable blob references
-    // is a separate later design. Refuse in the matrix's own words, and keep
-    // that distinct from a Space whose directory has gone missing.
-    // The matrix decides, and `diskTree` only supplies the path. Asking it
-    // directly would re-derive the requirement, and this one already spans
-    // both axes: a bundle needs the Space's bytes in the folder it archives.
+    // Declared as `space-bundle-export`; a portable export generated from
+    // records plus reachable blob references is a separate later design. The
+    // matrix decides and `diskTree` only supplies the path: this requirement
+    // spans both axes — the bundle is the Space folder archived, so it needs
+    // the bytes in it — and asking `diskTree` would re-derive only half.
+    // Refuse in the matrix's own words, and keep that distinct from a Space
+    // whose directory has gone missing.
     const tree = storageServes('space-bundle-export') ? handle.diskTree : null;
     if (!tree) {
       return reply.code(400).send({

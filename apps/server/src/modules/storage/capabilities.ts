@@ -119,14 +119,17 @@ export const STORAGE_CAPABILITIES: readonly StorageCapability[] = [
   },
   {
     id: 'reveal-space-folder',
-    summary: 'Reveal a Space in the OS file manager',
+    summary: "Open a Space's nodes folder in the OS file manager",
     requires: { structured: ['disk'] },
     rationale:
-      'The feature is "show me this in Finder", and what a user means by ' +
-      '"this" is the Space: its record and its node documents. Those are ' +
-      'rows. The one directory such a Space has holds its opaque bytes and ' +
-      'is Server-owned, so revealing it would open something that is not the ' +
-      'thing that was asked for.',
+      'It opens the folder of node documents so a user can settle a ' +
+      'duplicate-markdown collision by hand. Off Disk a node is a row: there ' +
+      'is no folder of documents to open, and the collision it exists to ' +
+      'settle cannot arise, because label uniqueness is a constraint rather ' +
+      "than a filename. The Space's byte areas are files, but they are " +
+      'hidden, Server-owned, and hold artifacts rather than documents — ' +
+      'opening those would answer a question nobody asked. No blob clause: ' +
+      'the folder is still the documents wherever the bytes went.',
   },
   {
     id: 'builtin-file-tools',
