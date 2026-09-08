@@ -8,6 +8,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DiskBlobStore } from './blob-store.js';
+import { canvasRoot } from './layout.js';
 
 import type * as NodeFsPromises from 'node:fs/promises';
 
@@ -39,7 +40,9 @@ describe('DiskBlobStore retry cleanup', () => {
     testState.renameAsync.mockRejectedValue(error);
 
     try {
-      const scope = new DiskBlobStore().space('canvas-under-test').artifacts;
+      const scope = new DiskBlobStore(canvasRoot).space(
+        'canvas-under-test',
+      ).artifacts;
 
       await expect(scope.put('blocked.bin', Buffer.from('bytes'))).rejects.toBe(
         error,

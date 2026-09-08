@@ -2555,7 +2555,20 @@ nothing. A Space's bytes therefore need a directory even where its record does
 not: the Disk blob adapter writes them to
 `<data dir>/storage/disk/blobs/<workspaceId>/<canvasId>/` (override the base
 with `HUABU_BLOB_ROOT`), in the same area layout it writes inside a Space
-folder. That directory is Server-owned and holds nothing but bytes; it is not
+folder.
+
+`blobs=disk` names a medium, not a directory. Where the bytes go is
+composition's, under one rule — **a Space's bytes live with the Space** — and
+the Space has two possible homes. On Disk records it is a folder, so the bytes
+stay inside it; that is not merely backward compatibility, it is what
+`space-bundle-export`, `space-bundle-import`, `reveal-space-folder` and
+`builtin-file-tools` are made of, since each of them is the Space folder being
+complete. On database records there is no folder to be inside. The corollary
+is a cross-axis constraint that does not bite yet: a blob backend that cannot
+co-locate — an object store — would put bytes outside the Space folder even on
+Disk records, and those four capabilities would then depend on both axes
+rather than the structured one alone. `capabilities.ts` records that where the
+matrix is defined. That directory is Server-owned and holds nothing but bytes; it is not
 a Workspace folder and it is not a Space tree, so none of §12.9.4's Disk-only
 capabilities become available because it exists. Postgres and Azure Blob
 adapters still do not exist.

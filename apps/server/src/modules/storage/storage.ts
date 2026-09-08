@@ -37,6 +37,7 @@ import {
   diskSpaceBlobRoot,
   workspaceRegistryPath,
 } from './backends/disk/data-dir.js';
+import { canvasRoot } from './backends/disk/layout.js';
 import { stageDiskSpaceImport } from './backends/disk/space-import.js';
 import { diskSpaceTree } from './backends/disk/space-tree.js';
 import { DiskStructuredStore } from './backends/disk/structured-store.js';
@@ -256,22 +257,39 @@ function composeSpace(storage: Storage, canvasId: string): Space {
 }
 
 /**
- * The blob connection for this profile.
+ * The blob connection for this profile, and where it puts a Space's bytes.
  *
- * One adapter, two placements. Where Disk also keeps the records, a Space's
- * bytes stay inside the Space folder — byte-for-byte the layout every existing
- * Workspace has. Where the records are rows, the same adapter writes the same
- * layout under a Server-owned root instead, which is what makes a hybrid
- * profile (SQL records, ordinary files) an ordinary deployment.
+ * `blobs=disk` names a *medium* — bytes are local files — so there is one
+ * adapter. The place is composition's to choose, and the rule is one sentence:
+ * **a Space's bytes live with the Space.**
+ *
+ * Where the structured backend files a Space as a directory, that directory is
+ * where the Space *is*, so the bytes go inside it. That is not only
+ * backward-compatibility with every Workspace that already exists: a Space
+ * folder being self-contained is what several declared capabilities are made
+ * of. `.huabu.zip` export is that folder archived, reveal-in-file-manager
+ * shows it, RFS projects it, and the built-in file tools sandbox on it.
+ * Relocating artifacts to a Server-owned root would quietly hollow out all
+ * four while every one of them still reported as available.
+ *
+ * Where a Space is a row it has no directory to be inside, so the adapter gets
+ * a root of its own under the Disk backend's data-directory area.
+ *
+ * One rule, two outcomes, because a Space has two possible homes — not two
+ * meanings for `blobs=disk`. The corollary is a genuine cross-axis constraint
+ * for the day a blob backend cannot co-locate: an object store would put bytes
+ * outside the Space folder even on Disk records, and the four capabilities
+ * above would then depend on both axes rather than the structured one alone
+ * (see `capabilities.ts`).
  */
 function buildBlobStore(profile: StorageProfile): BlobStore {
   if (profile.blobs.kind !== 'disk') {
     // Unreachable: validateStorageProfile rejects unimplemented kinds.
     throw new Error(`Unsupported blob backend: ${profile.blobs.kind}`);
   }
-  return profile.structured.kind === 'disk'
-    ? new DiskBlobStore()
-    : new DiskBlobStore(detachedSpaceRoot);
+  return new DiskBlobStore(
+    profile.structured.kind === 'disk' ? canvasRoot : detachedSpaceRoot,
+  );
 }
 
 function buildStructuredStore(profile: StorageProfile): StructuredStore {

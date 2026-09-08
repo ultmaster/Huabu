@@ -31,8 +31,19 @@ import type { StorageProfile } from './profile.js';
  * A product feature whose availability depends on the structured backend.
  *
  * Keyed by structured kind alone: every entry here needs a Space to be a real
- * directory, which is a structured-backend property. A feature that turned on
- * the blob backend instead would be a second matrix, and there are none.
+ * directory, which is a structured-backend property.
+ *
+ * Four of them need slightly more than that — they need the Space's *bytes* to
+ * be in that directory too. Bundle export archives the folder, bundle import
+ * unzips into it, reveal-in-file-manager shows it, and the built-in file tools
+ * sandbox on it; a Space whose artifacts had been relocated elsewhere would
+ * export as an incomplete bundle rather than fail. Today that is free: the one
+ * blob backend is a file system, and composition places a Space's bytes inside
+ * its directory whenever it has one (`storage.ts::buildBlobStore`). A blob
+ * backend that *cannot* co-locate — an object store — would break the
+ * implication, and those four rows would then have to be keyed on the profile
+ * rather than on the structured kind. That is the second matrix this comment
+ * used to say did not exist; it does not exist yet.
  */
 export interface StorageCapability {
   /** Stable id, for a diagnostic an operator can search for. */

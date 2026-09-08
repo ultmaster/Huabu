@@ -108,7 +108,9 @@ Each directory under `storage/` is named for the backend that owns it, and one f
 
 `storage/disk/` has two owners, so they get separate subtrees. `workspaces.json` is the Disk _structured_ store's Workspace registry — present only on a Disk-structured deployment, and never inside `blobs/`, because the blob store deletes whole directories and the registry is not its to delete. `blobs/` is the Disk _blob_ store's, reached only when the structured backend gives a Space no folder; `HUABU_BLOB_ROOT` moves that subtree alone.
 
-The byte root is Server-owned, not a Workspace folder: nothing in it is a Space record, and the Disk-only capabilities below stay unavailable because they need a real Space tree, not merely a directory. The layout beneath `<canvasId>/` is byte-for-byte the one the Disk profile uses inside a Space folder, because it is the same adapter — composition only tells it where the Space's root is.
+The byte root is Server-owned, not a Workspace folder: nothing in it is a Space record, and the Disk-only capabilities below stay unavailable because they need a real Space tree, not merely a directory.
+
+The layout beneath `<canvasId>/` is byte-for-byte the one the Disk profile uses inside a Space folder, because it is the same adapter. `blobs=disk` names a _medium_ — bytes are local files — and composition names the place, under one rule: **a Space's bytes live with the Space.** On a Disk-structured profile the Space _is_ a folder, so its bytes stay inside it, which is what keeps a Space folder self-contained for bundle export, reveal-in-file-manager, RFS, and the file tools. On a database-structured profile the Space has no folder to be inside, so the adapter gets the root above. One rule, two outcomes — the Space has two possible homes.
 
 | Table              | Holds                                                                                                                                    |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |

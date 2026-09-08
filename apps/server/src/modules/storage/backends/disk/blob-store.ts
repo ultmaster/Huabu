@@ -8,12 +8,11 @@
  * the layout the workspace format has always used: one file per blob, named by
  * the URL key, no manifest indirection.
  *
- * Where the Space's root *is* depends on the structured backend, which is why
- * it is injected rather than resolved here. When Disk also keeps the records,
- * the areas sit inside the Space folder the user can see — unchanged from
- * every Workspace that already exists. When the records live in a database
- * there is no such folder, so composition hands over a server-owned directory
- * instead; the layout beneath it is identical either way.
+ * The root is a constructor argument, because this adapter does not know where
+ * a Space is. `blobs=disk` names a *medium* — bytes are local files — and
+ * composition names the place (`storage.ts::buildBlobStore`, which carries the
+ * rule and the reason). Everything below the root is identical whichever place
+ * that turns out to be.
  *
  * Each scope is bound to the workspace active when it is created. A fresh
  * scope follows a workspace switch; a retained scope rejects the next
@@ -35,7 +34,6 @@ import { pipeline } from 'node:stream/promises';
 
 import {
   ARTIFACTS_DIR_NAME,
-  canvasRoot,
   MEMORY_DIR_NAME,
   UPLOAD_DIR_NAME,
 } from './layout.js';
@@ -79,9 +77,11 @@ type SpaceBlobArea = keyof SpaceBlobs;
 /**
  * Where this Space keeps its bytes.
  *
- * The Disk structured backend's own {@link canvasRoot} is the default, so a
- * Workspace that already exists is addressed exactly as before. A profile
- * whose records live elsewhere supplies its own.
+ * Supplied, never defaulted. Which directory a Space's bytes belong in is a
+ * fact about the whole deployment — it depends on whether the *structured*
+ * backend gives that Space a directory of its own — and this adapter is not
+ * the layer that knows. A default here would be that cross-axis decision made
+ * silently, by whichever caller forgot to pass one.
  */
 export type SpaceBlobRoot = (canvasId: string) => string;
 
@@ -331,7 +331,7 @@ export class DiskBlobStore implements BlobStore {
 
   readonly #root: SpaceBlobRoot;
 
-  constructor(root: SpaceBlobRoot = canvasRoot) {
+  constructor(root: SpaceBlobRoot) {
     this.#root = root;
   }
 
