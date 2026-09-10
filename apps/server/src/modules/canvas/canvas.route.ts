@@ -1647,11 +1647,12 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get<{
     Params: { canvasId: string };
     Querystring: ExportCanvasQuery;
-    // Success path streams a zip archive (Readable). Failure path is the
+    // Success streams a ZIP archive or returns 204 after an eligibility check.
+    // Failure is the
     // canonical ApiErrorBody — declared here so the 400/404 branches
     // type-check via the same `reply.send(...)` machinery the JSON
     // routes use.
-    Reply: ApiResult<NodeJS.ReadableStream>;
+    Reply: ApiResult<NodeJS.ReadableStream | undefined>;
   }>('/:canvasId/export', async function (request, reply) {
     const { canvasId } = request.params;
     const parsedQuery = exportCanvasQuerySchema.safeParse(request.query);
@@ -1678,12 +1679,19 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
     const tree = storageServes('space-bundle-export') ? handle.diskTree : null;
     if (!tree) {
       return reply.code(400).send({
+        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
         message: unavailableCapabilityMessage('space-bundle-export'),
       });
     }
     const canvasDir = tree.directory();
     if (!existsSync(canvasDir)) {
       return reply.code(404).send({ message: 'Canvas directory not found' });
+    }
+
+    // The browser checks eligibility before following the native download link.
+    // Keep the checks above shared so preflight uses the same storage policy.
+    if (parsedQuery.data.check === 'true') {
+      return reply.code(204).send(undefined);
     }
 
     const manifest = {
@@ -1755,6 +1763,7 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
         : null;
       if (!staged) {
         return reply.code(400).send({
+          code: 'STORAGE_CAPABILITY_UNAVAILABLE',
           message: unavailableCapabilityMessage('space-bundle-import'),
         });
       }

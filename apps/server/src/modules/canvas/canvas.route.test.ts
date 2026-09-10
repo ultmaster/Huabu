@@ -711,6 +711,69 @@ function useTablesProfile(): () => void {
 }
 
 describe('Disk-only capability refusals', () => {
+  it('preflights Disk export without sending an archive, then still downloads it', async () => {
+    createCanvas('c1', 'Disk Space');
+    const app = await buildApp();
+    try {
+      const checked = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export?check=true',
+      });
+      expect(checked.statusCode).toBe(204);
+      expect(checked.body).toBe('');
+      expect(checked.headers['content-disposition']).toBeUndefined();
+      const download = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export',
+      });
+      expect(download.statusCode).toBe(200);
+      expect(download.headers['content-type']).toBe('application/zip');
+      expect(download.rawPayload.subarray(0, 2).toString()).toBe('PK');
+      const missing = await app.inject({
+        method: 'GET',
+        url: '/canvas/missing/export?check=true',
+      });
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an unsupported export during preflight using the same policy as download', async () => {
+    createCanvas('c1', 'Tables Space');
+    const restore = useTablesProfile();
+    const app = await buildApp();
+    try {
+      const checked = await app.inject({
+        method: 'GET',
+        url: '/canvas/c1/export?check=true',
+      });
+      expect(checked.statusCode).toBe(400);
+      expect(checked.json()).toEqual({
+        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+        message: unavailableCapabilityMessage('space-bundle-export'),
+      });
+      const body = multipartBody(
+        'space.zip',
+        'application/zip',
+        Buffer.from('zip'),
+      );
+      const imported = await app.inject({
+        method: 'POST',
+        url: '/canvas/import',
+        ...body,
+      });
+      expect(imported.statusCode).toBe(400);
+      expect(imported.json()).toEqual({
+        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+        message: unavailableCapabilityMessage('space-bundle-import'),
+      });
+    } finally {
+      await app.close();
+      restore();
+    }
+  });
+
   it('refuses in the same words the profile declared at startup', async () => {
     createCanvas('c1', 'Tables Space');
     const restore = useTablesProfile();
