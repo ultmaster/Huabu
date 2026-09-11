@@ -114,6 +114,26 @@ function encode(value: unknown, what: string): string {
   return encoded;
 }
 
+/** A replacement either installs the complete log or leaves the old one intact. */
+function replaceLogAtomically(
+  database: DatabaseSync,
+  replace: () => void,
+): void {
+  // A savepoint gives this batch its own rollback boundary without committing
+  // or rejecting an enclosing transaction.
+  database.exec('SAVEPOINT agenetes_log_replace');
+  try {
+    replace();
+    database.exec('RELEASE SAVEPOINT agenetes_log_replace');
+  } catch (error) {
+    if (database.isTransaction) {
+      database.exec('ROLLBACK TO SAVEPOINT agenetes_log_replace');
+      database.exec('RELEASE SAVEPOINT agenetes_log_replace');
+    }
+    throw error;
+  }
+}
+
 function decode<T>(value: unknown, what: string): T {
   if (typeof value !== 'string') {
     throw new SyntaxError(`${what} is not stored as JSON text`);
@@ -263,27 +283,25 @@ export class SqliteEventLogStore implements EventLogStore {
     threadId: string,
     records: readonly EventLogRecord[],
   ): void {
+    const encoded = records.map((record) => ({
+      seq: record.seq,
+      json: encode(record, `Event log for thread ${threadId}`),
+    }));
     const { database, extensionId } = requireSubstrate(namespace);
-    // One statement batch, not a transaction: `rehome()` calls this while the
-    // instance holds its own ordering, and an adapter that opened a nested
-    // transaction here would collide with a caller that already has one.
-    database
-      .prepare(
-        'DELETE FROM agenetes_events WHERE extension_id = ? AND thread_id = ?',
-      )
-      .run(extensionId, threadId);
-    const insert = database.prepare(
-      `INSERT INTO agenetes_events (extension_id, thread_id, seq, record_json)
-       VALUES (?, ?, ?, ?)`,
-    );
-    for (const record of records) {
-      insert.run(
-        extensionId,
-        threadId,
-        record.seq,
-        encode(record, `Event log for thread ${threadId}`),
+    replaceLogAtomically(database, () => {
+      database
+        .prepare(
+          'DELETE FROM agenetes_events WHERE extension_id = ? AND thread_id = ?',
+        )
+        .run(extensionId, threadId);
+      const insert = database.prepare(
+        `INSERT INTO agenetes_events (extension_id, thread_id, seq, record_json)
+         VALUES (?, ?, ?, ?)`,
       );
-    }
+      for (const record of encoded) {
+        insert.run(extensionId, threadId, record.seq, record.json);
+      }
+    });
   }
 
   delete(namespace: Namespace, threadId: string): void {
@@ -392,26 +410,33 @@ export class SqliteTurnStore implements TurnStore {
     threadId: string,
     persisted: readonly PersistedTurn[],
   ): void {
+    const encoded = persisted.map((record) => ({
+      seqStart: record.seqStart,
+      seqEnd: record.seqEnd,
+      json: encode(record.turn, `Turn for thread ${threadId}`),
+    }));
     const { database, extensionId } = requireSubstrate(namespace);
-    database
-      .prepare(
-        'DELETE FROM agenetes_turns WHERE extension_id = ? AND thread_id = ?',
-      )
-      .run(extensionId, threadId);
-    const insert = database.prepare(
-      `INSERT INTO agenetes_turns (
-         extension_id, thread_id, ordinal, seq_start, seq_end, turn_json
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
-    );
-    persisted.forEach((record, index) => {
-      insert.run(
-        extensionId,
-        threadId,
-        index + 1,
-        record.seqStart,
-        record.seqEnd,
-        encode(record.turn, `Turn for thread ${threadId}`),
+    replaceLogAtomically(database, () => {
+      database
+        .prepare(
+          'DELETE FROM agenetes_turns WHERE extension_id = ? AND thread_id = ?',
+        )
+        .run(extensionId, threadId);
+      const insert = database.prepare(
+        `INSERT INTO agenetes_turns (
+           extension_id, thread_id, ordinal, seq_start, seq_end, turn_json
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
       );
+      encoded.forEach((record, index) => {
+        insert.run(
+          extensionId,
+          threadId,
+          index + 1,
+          record.seqStart,
+          record.seqEnd,
+          record.json,
+        );
+      });
     });
   }
 

@@ -625,9 +625,11 @@ const DEFAULT_WORKSPACE_NAME = 'Workspace';
 export async function activateWorkspace(
   workspace: WorkspaceHandle,
 ): Promise<void> {
+  // The lease guard must accept the switch before either cached World state
+  // or the SQLite connection moves away from the current Workspace.
+  commitWorkspaceIdentity(workspace);
   if (sqlite) sqlite.useWorkspace(workspace.workspaceId);
   activeWorldCanvasId = null;
-  commitWorkspaceIdentity(workspace);
   if (workspaces instanceof SqliteWorkspaceRepository) {
     workspaces.markOpened(workspace.workspaceId);
   }

@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { request as httpRequest, type ClientRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -711,6 +712,57 @@ function useTablesProfile(): () => void {
 }
 
 describe('Disk-only capability refusals', () => {
+  it('rejects an unsupported import before waiting for multipart file data', async () => {
+    const restore = useTablesProfile();
+    const app = await buildApp();
+    let upload: ClientRequest | undefined;
+    try {
+      const address = await app.listen({ port: 0, host: '127.0.0.1' });
+      const body = await new Promise<string>((resolve, reject) => {
+        upload = httpRequest(
+          `${address}/canvas/import`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'multipart/form-data; boundary=unfinished-upload',
+              'transfer-encoding': 'chunked',
+            },
+          },
+          (response) => {
+            let body = '';
+            response.setEncoding('utf8');
+            response.on('data', (chunk: string) => {
+              body += chunk;
+            });
+            response.on('error', reject);
+            response.on('end', () => {
+              if (response.statusCode !== 400) {
+                reject(new Error(`Unexpected status ${response.statusCode}`));
+              } else resolve(body);
+            });
+          },
+        );
+        upload.on('error', reject);
+        upload.setTimeout(2_000, () => {
+          upload?.destroy(
+            new Error('Import waited for unsupported upload data'),
+          );
+        });
+        // Send only HTTP headers. An unsupported profile already has enough
+        // information to refuse, even if the client has not sent a file yet.
+        upload.flushHeaders();
+      });
+      expect(JSON.parse(body)).toEqual({
+        code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+        message: unavailableCapabilityMessage('space-bundle-import'),
+      });
+    } finally {
+      upload?.destroy();
+      await app.close();
+      restore();
+    }
+  });
+
   it('preflights Disk export without sending an archive, then still downloads it', async () => {
     createCanvas('c1', 'Disk Space');
     const app = await buildApp();

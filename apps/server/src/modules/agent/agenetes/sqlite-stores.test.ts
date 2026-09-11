@@ -17,6 +17,7 @@ import {
   conversationThreadStore,
   conversationTurnStore,
 } from './conversation-stores.js';
+import { conversationTables } from './sqlite-stores.js';
 import { deleteSpace } from '../../storage/index.js';
 import {
   mountTestWorkspace,
@@ -25,7 +26,11 @@ import {
 import { canvasAcpNamespace } from '../../workspace/paths.js';
 
 import type { StorageProfile } from '../../storage/profile.js';
-import type { ThreadRecord } from '@agenetes/agenetes';
+import type {
+  EventLogRecord,
+  PersistedTurn,
+  ThreadRecord,
+} from '@agenetes/agenetes';
 import type { AgentStateSnapshot, WorkloadSpec } from '@agenetes/protocol';
 
 const SQLITE: StorageProfile = {
@@ -67,6 +72,94 @@ function threadRecord(threadId = THREAD_ID): ThreadRecord {
 }
 
 describe('Agenetes conversation stores on SQLite', () => {
+  for (const kind of ['events', 'turns'] as const) {
+    describe(`${kind} replacement`, () => {
+      async function setupReplacement() {
+        await openWithSpace();
+        const namespace = canvasAcpNamespace(CANVAS_ID);
+        const substrate = conversationTables(namespace);
+        if (!substrate) throw new Error('Expected SQLite conversation tables');
+        const replace = (values: readonly number[]) => {
+          if (kind === 'events') {
+            conversationEventLogStore.replace(
+              namespace,
+              THREAD_ID,
+              values.map((seq) => ({
+                seq,
+                ts: 1,
+                kind: 'turn_start',
+                request: null,
+              })),
+            );
+          } else {
+            conversationTurnStore.replace(
+              namespace,
+              THREAD_ID,
+              values.map((seq) => ({
+                seqStart: seq,
+                seqEnd: seq,
+                turn: { id: `turn-${seq}` } as never,
+              })),
+            );
+          }
+        };
+        const read = () =>
+          kind === 'events'
+            ? conversationEventLogStore.readRecords(namespace, THREAD_ID)
+            : conversationTurnStore.list(namespace, THREAD_ID);
+        replace([1, 2]);
+        return { namespace, database: substrate.database, replace, read };
+      }
+
+      it('restores the complete old log when a later replacement insert fails', async () => {
+        const { database, replace, read } = await setupReplacement();
+        const before = read();
+        // Fail the second insert after the delete and first insert have run.
+        const sequence = kind === 'events' ? 'seq' : 'seq_start';
+        database.exec(`
+          CREATE TRIGGER reject_replacement BEFORE INSERT ON agenetes_${kind}
+          WHEN NEW.${sequence} = 4
+          BEGIN SELECT RAISE(ABORT, 'replacement insert failed'); END;
+        `);
+        expect(() => replace([3, 4])).toThrow('replacement insert failed');
+        expect(read()).toEqual(before);
+        expect(database.isTransaction).toBe(false);
+
+        database.exec('DROP TRIGGER reject_replacement');
+        replace([3, 4]);
+        expect(read()).toHaveLength(2);
+        expect(read()).not.toEqual(before);
+        replace([]);
+        expect(read()).toEqual([]);
+      });
+
+      it('leaves the old log intact when replacement serialization fails', async () => {
+        const { namespace, read } = await setupReplacement();
+        const before = read();
+        const cyclic: Record<string, unknown> = {};
+        cyclic.self = cyclic;
+        expect(() => {
+          if (kind === 'events') {
+            conversationEventLogStore.replace(namespace, THREAD_ID, [
+              { seq: 3, ts: 1, kind: 'turn_start', request: null },
+              { seq: 4, ts: 1, event: cyclic } as unknown as EventLogRecord,
+            ]);
+          } else {
+            conversationTurnStore.replace(namespace, THREAD_ID, [
+              { seqStart: 3, seqEnd: 3, turn: { id: 'turn-3' } as never },
+              {
+                seqStart: 4,
+                seqEnd: 4,
+                turn: cyclic,
+              } as unknown as PersistedTurn,
+            ]);
+          }
+        }).toThrow(/circular/i);
+        expect(read()).toEqual(before);
+      });
+    });
+  }
+
   it('keeps a Space with no directory out of the file stores', async () => {
     await openWithSpace();
     const namespace = canvasAcpNamespace(CANVAS_ID);

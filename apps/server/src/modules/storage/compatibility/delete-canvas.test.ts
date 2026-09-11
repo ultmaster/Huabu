@@ -48,11 +48,11 @@ vi.mock('../../workspace.js', () => ({
   getWorkspacePath: () => workspaceState.path,
   getWorkspaceKey: () => workspaceState.path,
   acquireWorkspaceOperationLease: () => {
-    const workspacePath = workspaceState.path;
+    const workspaceKey = workspaceState.path;
     workspaceState.leaseCount += 1;
     let released = false;
     return Object.freeze({
-      workspacePath,
+      workspaceKey,
       release: () => {
         if (released) return;
         released = true;

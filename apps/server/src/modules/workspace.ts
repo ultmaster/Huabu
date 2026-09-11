@@ -59,7 +59,7 @@ const ENV_KEY = 'HUABU_WORKSPACE';
 let _workspaceHandle: WorkspaceHandle | null = null;
 let _workspacePath: string | null = null;
 let _managed = false;
-let _leasedWorkspacePath: string | null = null;
+let _leasedWorkspaceKey: string | null = null;
 let _workspaceOperationLeaseCount = 0;
 let _activatingWorkspacePath: string | null = null;
 
@@ -71,7 +71,7 @@ let _activatingWorkspacePath: string | null = null;
  * original result.
  */
 export interface WorkspaceOperationLease {
-  readonly workspacePath: string;
+  readonly workspaceKey: string;
   release(): void;
 }
 
@@ -207,37 +207,37 @@ export function getWorkspaceHandle(): WorkspaceHandle | null {
  *
  * Multiple operations may hold leases concurrently. Switching to another
  * workspace is rejected until every lease has been released; recommitting the
- * same path remains allowed.
+ * same Workspace remains allowed.
  */
 export function acquireWorkspaceOperationLease(): WorkspaceOperationLease {
-  const workspacePath = getWorkspaceKey();
+  const workspaceKey = getWorkspaceKey();
 
   if (
     _activatingWorkspacePath !== null &&
-    _activatingWorkspacePath !== workspacePath
+    _activatingWorkspacePath !== workspaceKey
   ) {
     throw new WorkspaceActivationInProgressError();
   }
 
   if (
     _workspaceOperationLeaseCount > 0 &&
-    _leasedWorkspacePath !== workspacePath
+    _leasedWorkspaceKey !== workspaceKey
   ) {
     throw new Error('Workspace operation lease invariant violated');
   }
 
-  _leasedWorkspacePath = workspacePath;
+  _leasedWorkspaceKey = workspaceKey;
   _workspaceOperationLeaseCount += 1;
 
   let released = false;
   return Object.freeze({
-    workspacePath,
+    workspaceKey,
     release(): void {
       if (released) return;
       released = true;
       _workspaceOperationLeaseCount -= 1;
       if (_workspaceOperationLeaseCount === 0) {
-        _leasedWorkspacePath = null;
+        _leasedWorkspaceKey = null;
       }
     },
   });
@@ -358,8 +358,8 @@ export function commitWorkspaceIdentity(workspace: WorkspaceHandle): void {
   const key = `workspace:${workspace.workspaceId}`;
   if (
     _workspaceOperationLeaseCount > 0 &&
-    _leasedWorkspacePath !== null &&
-    _leasedWorkspacePath !== key
+    _leasedWorkspaceKey !== null &&
+    _leasedWorkspaceKey !== key
   ) {
     throw new WorkspaceOperationInProgressError();
   }
@@ -402,8 +402,8 @@ function validateAbsolutePath(p: string): void {
 function assertWorkspacePathChangeAllowed(resolvedPath: string): void {
   if (
     _workspaceOperationLeaseCount > 0 &&
-    _leasedWorkspacePath !== null &&
-    _leasedWorkspacePath !== resolvedPath
+    _leasedWorkspaceKey !== null &&
+    _leasedWorkspaceKey !== resolvedPath
   ) {
     throw new WorkspaceOperationInProgressError();
   }

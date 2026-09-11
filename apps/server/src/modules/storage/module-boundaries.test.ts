@@ -99,6 +99,7 @@ describe('storage module tree', () => {
       'space-lifecycle-admission.ts',
       'storage.ts',
       'testing.ts',
+      'workspace-activation.test.ts',
     ]);
   });
 

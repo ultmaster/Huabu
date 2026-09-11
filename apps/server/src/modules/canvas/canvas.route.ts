@@ -1743,13 +1743,6 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{ Reply: ApiResult<ImportCanvasResponse> }>(
     '/import',
     async function (request, reply) {
-      const file = await request.file();
-      if (!file) {
-        return reply.code(400).send({ message: 'No file provided' });
-      }
-
-      // Stream the upload to a temp zip file
-      const tmpZip = path.join(tmpdir(), `${createId('import')}.zip`);
       const targetCanvasId = createId('canvas');
       // Where an imported Space lands is the backend's business — the
       // staging location, the title-derived directory, the record filename,
@@ -1767,6 +1760,14 @@ const canvasRoutes: FastifyPluginAsync = async (fastify) => {
           message: unavailableCapabilityMessage('space-bundle-import'),
         });
       }
+      // Refuse unsupported imports before opening a paused multipart stream.
+      const file = await request.file();
+      if (!file) {
+        return reply.code(400).send({ message: 'No file provided' });
+      }
+
+      // Stream the upload to a temp zip file.
+      const tmpZip = path.join(tmpdir(), `${createId('import')}.zip`);
       const stagingDir = staged.stagingDirectory;
       let stagingCleanedUp = false;
       try {
