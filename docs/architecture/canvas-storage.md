@@ -87,6 +87,8 @@ Key points:
 
 `HUABU_STRUCTURED_BACKEND=sqlite` selects the second implemented structured backend. The blob axis stays `disk`, because bytes are always files. It needs **no Workspace folder and no Space directories**: every record is a row, and the only directories are the ones a Space's bytes sit in.
 
+SQLite uses Node's built-in `node:sqlite`, which requires the `node:` prefix. The server and worker bundles preserve that prefix with tsup's `removeNodeProtocol: false`; stripping it makes desktop startup try to load an npm package named `sqlite` and fail before the server can listen.
+
 ```
 <HUABU_DATA_DIR>/storage/
   sqlite/                         # the SQLite backend's area
