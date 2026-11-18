@@ -55,7 +55,10 @@ describe('EncryptedSecretStore', () => {
       new EncryptedSecretStore(diskServerRecords(dataDir), key).initialize(),
     ).rejects.toThrow('Failed to decrypt credential');
     await expect(
-      new EncryptedSecretStore(diskServerRecords(dataDir), Buffer.alloc(32, 8)).initialize(),
+      new EncryptedSecretStore(
+        diskServerRecords(dataDir),
+        Buffer.alloc(32, 8),
+      ).initialize(),
     ).rejects.toThrow('does not match');
   });
 });

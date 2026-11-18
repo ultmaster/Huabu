@@ -9,7 +9,10 @@ import {
 } from 'node:crypto';
 
 import type { SecretStore } from './secret-store-types.js';
-import type { ServerRecordKey, ServerRecords } from '../modules/storage/index.js';
+import type {
+  ServerRecordKey,
+  ServerRecords,
+} from '../modules/storage/index.js';
 
 interface EncryptedEntry {
   iv: string;
@@ -147,9 +150,7 @@ export class EncryptedSecretStore implements SecretStore {
     let next = new Map<string, string>();
     await this.records.update(CREDENTIALS_RECORD, (current) => {
       next =
-        current === null
-          ? new Map()
-          : this.decryptAll(this.parseOwn(current));
+        current === null ? new Map() : this.decryptAll(this.parseOwn(current));
       for (const [id, value] of Object.entries(updates)) {
         if (!overwrite && next.has(id)) continue;
         if (value === null) next.delete(id);
